@@ -1,15 +1,25 @@
 package crawler
 
-import Crawler.{CheckIfDone, Command, PageContent, StartCrawling}
-import PlaywrightCrawler.StartScrape
-import PlaywrightWorker.PageScrapedResult
-import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, Behavior}
-import org.apache.pekko.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
-
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.*
-import scala.util.{Failure, Random, Success}
+import scala.util.Failure
+import scala.util.Random
+import scala.util.Success
+
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.ActorSystem
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
+
+import crawler.Crawler.CheckIfDone
+import crawler.Crawler.Command
+import crawler.Crawler.PageContent
+import crawler.Crawler.StartCrawling
+import crawler.PlaywrightCrawler.StartScrape
+import crawler.PlaywrightWorker.PageScrapedResult
 
 object Crawler:
 
@@ -76,7 +86,7 @@ object Crawler:
 
         given ExecutionContext = context.executionContext
         given ActorSystem[_] = context.system
-        context.pipeToSelf(PlaywrightWorker.robotsTxt(seedUrl)) {
+        context.pipeToSelf(PlaywrightWorker.robotsTxt(java.net.URL(seedUrl))) {
           case Success(_) => StartCrawling(Set(seedUrl), maxDepth)
           case Failure(exception) =>
             context.log.error(s"Failed to fetch robots.txt: $exception")

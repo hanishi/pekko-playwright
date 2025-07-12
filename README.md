@@ -12,7 +12,8 @@ It supports:
 - Click-based interaction (e.g. expand buttons)
 - Retry logic and error handling
 - Parallel scraping via actor supervision
-
+- Proxy support for IP rotation
+  see [Proxy Configuration](src/main/resources/application.conf) for details
 ---
 🚧 Project Status: Work in Progress
 

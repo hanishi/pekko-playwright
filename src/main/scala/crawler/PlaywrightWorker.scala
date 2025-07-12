@@ -1,19 +1,34 @@
 package crawler
 
-import com.microsoft.playwright.{Browser, BrowserType, Page, Playwright}
-import com.microsoft.playwright.options.LoadState
-import PlaywrightWorker.{PageScrapedResult, ScrapePage, extractTextAndLinks}
-import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, Behavior}
-import org.apache.pekko.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
+import java.net.URL
+
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
+import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
+import scala.util.Failure
+import scala.util.Random
+import scala.util.Success
+import scala.util.Try
+
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.ActorSystem
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.http.scaladsl.Http
 import org.apache.pekko.http.scaladsl.model.HttpRequest
 import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshal
 
-import scala.concurrent.{ExecutionContext, Future}
-import scala.concurrent.duration.*
-import scala.jdk.CollectionConverters.*
-import scala.util.{Failure, Random, Success, Try}
+import com.microsoft.playwright.*
+import com.microsoft.playwright.options.LoadState
+import com.microsoft.playwright.options.Proxy as PlaywrightProxy
+import com.typesafe.config.ConfigFactory
 
+import crawler.PlaywrightWorker.PageScrapedResult
+import crawler.PlaywrightWorker.ScrapePage
+import crawler.PlaywrightWorker.extractTextAndLinks
 private class PlaywrightWorker(
     browser: Browser,
     domain: String,
@@ -74,6 +89,26 @@ private class PlaywrightWorker(
   }
 
 object PlaywrightWorker:
+  private val config = ConfigFactory.load().getConfig("crawler")
+  private val useProxy = config.getBoolean("useProxy")
+  private val proxyConfigs = if useProxy then
+    Option(
+      config.getConfigList("proxyProviders").asScala.map { conf =>
+        ProxyProviderConf(
+          conf.getString("provider"),
+          conf.getString("server"),
+          conf.getString("username"),
+          conf.getString("password"),
+        )
+      }.toSeq
+    ).filter(_.nonEmpty).map(new ProxyRoundRobin(_))
+  else None
+
+  private class ProxyRoundRobin(proxies: Seq[ProxyProviderConf]) {
+    private val it = Iterator.continually(proxies).flatten
+
+    def next(): ProxyProviderConf = it.next()
+  }
 
   def apply(
       domain: String,
@@ -81,9 +116,22 @@ object PlaywrightWorker:
       clickSelector: Option[String],
   ): Behavior[ScrapePage] = Behaviors.setup[ScrapePage]: context =>
     Behaviors.withTimers: timers =>
+
+      val launchOptions = proxyConfigs
+        .fold(BrowserType.LaunchOptions().setHeadless(true)) {
+          proxyRoundRobin =>
+            val nextProxy = proxyRoundRobin.next()
+            context.log
+              .info(s"Using proxy from ${nextProxy.provider}: ${nextProxy
+                  .server}")
+            BrowserType.LaunchOptions().setHeadless(true).setProxy(
+              PlaywrightProxy(nextProxy.server).setUsername(nextProxy.username)
+                .setPassword(nextProxy.password),
+            )
+        }
+
       new PlaywrightWorker(
-        Playwright.create().chromium()
-          .launch(new BrowserType.LaunchOptions().setHeadless(true)),
+        Playwright.create().chromium().launch(launchOptions),
         domain,
         hostRegex,
         clickSelector,
@@ -160,11 +208,10 @@ object PlaywrightWorker:
     (text, links)
 
   def robotsTxt(
-      url: String,
+      url: URL,
   )(using system: ActorSystem[_], ec: ExecutionContext): Future[Boolean] = {
-    val robotsUrl =
-      s"${new java.net.URL(url).getProtocol}://${new java.net.URL(url)
-          .getHost}/robots.txt"
+
+    val robotsUrl = s"${url.getProtocol}://${url.getHost}/robots.txt"
     val responseFuture = Http().singleRequest(HttpRequest(uri = robotsUrl))
     responseFuture.flatMap { response =>
       Unmarshal(response.entity).to[String].map { content =>

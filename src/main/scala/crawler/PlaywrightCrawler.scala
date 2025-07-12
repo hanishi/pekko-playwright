@@ -1,12 +1,20 @@
 package crawler
 
-import PlaywrightCrawler.{CommandOrResponse, StartScrape}
-import PlaywrightWorker.*
-import org.apache.pekko.actor.typed.{ActorRef, Behavior, SupervisorStrategy}
-import org.apache.pekko.actor.typed.scaladsl.{ActorContext, Behaviors, PoolRouter, Routers, StashBuffer}
-
 import scala.collection.mutable
 import scala.math.max
+
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.SupervisorStrategy
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.PoolRouter
+import org.apache.pekko.actor.typed.scaladsl.Routers
+import org.apache.pekko.actor.typed.scaladsl.StashBuffer
+
+import crawler.PlaywrightCrawler.CommandOrResponse
+import crawler.PlaywrightCrawler.StartScrape
+import crawler.PlaywrightWorker.*
 
 private class PlaywrightCrawler(
     context: ActorContext[CommandOrResponse],
@@ -18,7 +26,9 @@ private class PlaywrightCrawler(
     targetElement: String,
     clickSelector: Option[String],
 ):
+
   private val workerPool: PoolRouter[ScrapePage] = Routers.pool(concurrency) {
+
     Behaviors.supervise(PlaywrightWorker(domain, hostRegex, clickSelector))
       .onFailure(SupervisorStrategy.restart)
   }
@@ -80,6 +90,7 @@ private class PlaywrightCrawler(
   }
 
 object PlaywrightCrawler:
+
   private type CommandOrResponse = Command | PageScrapedResult
   def apply(
       concurrency: Int,
