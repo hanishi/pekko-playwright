@@ -1,7 +1,9 @@
 package crawler
 
 import scala.collection.mutable
+import scala.concurrent.duration.*
 import scala.math.max
+import scala.util.Random
 
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
@@ -59,12 +61,18 @@ private class PlaywrightCrawler(
         .splitAt(max(0, concurrency - inFlight))
 
       urlsToProcess.foreach { url =>
-        context.log.debug(s"Dispatching scrape task for: $url")
-        workerRouter ! ScrapePage(
-          context.self,
-          url,
-          if depths.isEmpty then "body" else targetElement,
-          depth,
+        // this is experimental, but it helps to avoid overwhelming the target server?
+        val delay = (Random.nextInt(5) + 1).seconds
+        context.log.debug(s"Dispatching scrape task for: $url after $delay")
+        context.scheduleOnce(
+          delay,
+          workerRouter,
+          ScrapePage(
+            context.self,
+            url,
+            if depths.isEmpty then "body" else targetElement,
+            depth,
+          ),
         )
         depths(depth) = depths.getOrElseUpdate(depth, 0) + 1
       }

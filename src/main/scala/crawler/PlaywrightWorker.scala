@@ -21,6 +21,7 @@ import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshal
 import com.microsoft.playwright.*
 import com.microsoft.playwright.options.LoadState
 import com.microsoft.playwright.options.Proxy as PlaywrightProxy
+import com.microsoft.playwright.options.WaitUntilState
 import com.typesafe.config.ConfigFactory
 
 import crawler.PlaywrightWorker.PageScrapedResult
@@ -28,7 +29,7 @@ import crawler.PlaywrightWorker.ScrapePage
 import crawler.PlaywrightWorker.extractTextAndLinks
 
 private class PlaywrightWorker(
-    browser: BrowserContext,
+    browserContextFactory: BrowserContextFactory,
     domain: String,
     hostRegex: String,
     clickSelector: Option[String],
@@ -40,35 +41,65 @@ private class PlaywrightWorker(
   private val domainRegex =
     s"(?:https?:\\/\\/(?:.+\\.)?${domain.replace(".", "\\.")})?"
 
-  private def processing: Behavior[ScrapePage] = Behaviors.receiveMessage {
+  private def processing(
+      browserContext: BrowserContext = browserContextFactory.create(),
+      successCount: Int = 0,
+  ): Behavior[ScrapePage] = Behaviors.receiveMessage {
     case command @ ScrapePage(replyTo, url, targetElement, depth, attempt) =>
-
-      val page = browser.newPage()
+      browserContext.clearCookies()
+      val page = browserContext.newPage()
       Try {
-        page.route("**/*.{png,jpg,jpeg}", route => route.abort())
-        page.route(
-          "**",
-          route => {
-            val requestUrl = route.request().url()
-            if (!requestUrl.matches("^" + domainRegex + "\\/.*")) route.abort()
-            else route.resume()
-          },
+//        page.route(
+//          "**",
+//          route => {
+//            val url = route.request().url()
+//            if (url.matches(".*\\.(png|jpe?g)$")) route.abort()
+//            else if (!url.matches("^" + domainRegex + "/.*")) route.abort()
+//            else route.resume()
+//          },
+//        )
+        page.route("**", route => {
+          val req = route.request()
+          val url = req.url()
+          val resourceType = req.resourceType()
+
+          if (resourceType == "image" || url.matches(".*\\.(png|jpe?g|webp|svg|gif)$")) {
+            route.abort()
+          } else {
+            route.resume()
+          }
+        })
+
+//        page.route("**", route => route.resume())
+        val response = page.navigate(
+          url,
+          new Page.NavigateOptions()
+            .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(15000),
         )
-        page.navigate(url)
+        if (response == null)
+          throw new RuntimeException(s"No response received for $url")
+        else if (response.status() >= 400)
+          throw new RuntimeException(s"Bad response status ${response
+              .status()} for $url: ${response.statusText()}")
         page.waitForLoadState(LoadState.DOMCONTENTLOADED)
         clickSelector.foreach { selector =>
-          val clickElement = page.querySelector(selector)
-          if (clickElement != null && clickElement.isVisible) {
-            clickElement.click()
-            context.log.info(s"Clicked on $selector")
-          }
+          Option(page.querySelector(selector))
+            .foreach(el => if (el.isVisible) el.click())
         }
         extractTextAndLinks(page, domainRegex + hostRegex, targetElement)
       } match {
         case Success((text, links)) =>
           page.close()
+          val newSuccessCount = successCount + 1
+          val (nextContext, resetCount) =
+            if (newSuccessCount >= 5) {
+              context.log
+                .info("Rotating browser context after 5 successful scrapes.")
+              browserContext.close()
+              (browserContextFactory.create(), 0)
+            } else (browserContext, newSuccessCount)
           replyTo ! PageScrapedResult(url, text, links, depth, 1)
-          processing
+          processing(nextContext, resetCount)
         case Failure(e) =>
           page.close()
           context.log.warn(s"Error processing $url: ${e.getMessage}")
@@ -77,20 +108,18 @@ private class PlaywrightWorker(
               .warn(s"Max retries reached for ${command.url}. Skipping.")
             replyTo !
               PageScrapedResult(command.url, "", Seq.empty, command.depth, 0)
-            processing
+            processing()
           } else {
+            browserContext.close()
             val delay = (Random.nextInt(5) + 1).seconds
             timers.startSingleTimer(command.copy(attempt = attempt + 1), delay)
-            processing
+            processing()
           }
       }
   }
 
 object PlaywrightWorker:
-  private val javascript = Using
-    .resource(getClass.getResourceAsStream("/crawler.js")) { jsStream =>
-      scala.io.Source.fromInputStream(jsStream).mkString
-    }
+
   private val config = ConfigFactory.load().getConfig("crawler")
   private val useProxy = config.getBoolean("useProxy")
   private val proxyConfigs =
@@ -118,8 +147,7 @@ object PlaywrightWorker:
   ): Behavior[ScrapePage] = Behaviors.setup[ScrapePage]: context =>
     Behaviors.withTimers: timers =>
 
-      val launchOptions = proxyConfigs
-        .fold(BrowserType.LaunchOptions().setHeadless(true)) {
+      val launchOptions = proxyConfigs.fold(BrowserType.LaunchOptions().setHeadless(true)) {
           proxyRoundRobin =>
             val nextProxy = proxyRoundRobin.next()
             context.log
@@ -130,17 +158,15 @@ object PlaywrightWorker:
                 .setPassword(nextProxy.password),
             )
         }
-      val browserContext = Playwright.create().chromium().launch(launchOptions)
-        .newContext()
-      browserContext.addInitScript(javascript)
+
       new PlaywrightWorker(
-        browserContext,
+        BrowserContextFactory(launchOptions, "/crawler.js"),
         domain,
         hostRegex,
         clickSelector,
         context,
         timers,
-      ).processing
+      ).processing()
 
   def extractTextAndLinks(
       page: Page,
