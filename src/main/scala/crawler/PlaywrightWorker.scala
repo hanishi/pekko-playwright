@@ -6,10 +6,7 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
-import scala.util.Failure
-import scala.util.Random
-import scala.util.Success
-import scala.util.Try
+import scala.util.*
 
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.ActorSystem
@@ -29,8 +26,9 @@ import com.typesafe.config.ConfigFactory
 import crawler.PlaywrightWorker.PageScrapedResult
 import crawler.PlaywrightWorker.ScrapePage
 import crawler.PlaywrightWorker.extractTextAndLinks
+
 private class PlaywrightWorker(
-    browser: Browser,
+    browser: BrowserContext,
     domain: String,
     hostRegex: String,
     clickSelector: Option[String],
@@ -89,20 +87,23 @@ private class PlaywrightWorker(
   }
 
 object PlaywrightWorker:
+  private val javascript = Using
+    .resource(getClass.getResourceAsStream("/crawler.js")) { jsStream =>
+      scala.io.Source.fromInputStream(jsStream).mkString
+    }
   private val config = ConfigFactory.load().getConfig("crawler")
   private val useProxy = config.getBoolean("useProxy")
-  private val proxyConfigs = if useProxy then
-    Option(
-      config.getConfigList("proxyProviders").asScala.map { conf =>
+  private val proxyConfigs =
+    if useProxy then
+      Option(config.getConfigList("proxyProviders").asScala.map { conf =>
         ProxyProviderConf(
           conf.getString("provider"),
           conf.getString("server"),
           conf.getString("username"),
           conf.getString("password"),
         )
-      }.toSeq
-    ).filter(_.nonEmpty).map(new ProxyRoundRobin(_))
-  else None
+      }.toSeq).filter(_.nonEmpty).map(new ProxyRoundRobin(_))
+    else None
 
   private class ProxyRoundRobin(proxies: Seq[ProxyProviderConf]) {
     private val it = Iterator.continually(proxies).flatten
@@ -129,9 +130,11 @@ object PlaywrightWorker:
                 .setPassword(nextProxy.password),
             )
         }
-
+      val browserContext = Playwright.create().chromium().launch(launchOptions)
+        .newContext()
+      browserContext.addInitScript(javascript)
       new PlaywrightWorker(
-        Playwright.create().chromium().launch(launchOptions),
+        browserContext,
         domain,
         hostRegex,
         clickSelector,
@@ -144,59 +147,7 @@ object PlaywrightWorker:
       regexString: String,
       target: String,
   ): (String, Seq[(String, String)]) =
-    val result = page.evaluate(
-      """([regexString, target]) => {
-      const currentUrl = new URL(window.location.href);
-      const baseUrl = `${currentUrl.protocol}//${currentUrl.host}`;
-      const linkRegex = new RegExp(regexString);
-      const targetElement = document.querySelector(target);
-
-      function traverse(node, insideTarget) {
-        let text = "";
-        let links = [];
-
-        if (node.nodeType === Node.TEXT_NODE) {
-          // Do not trim here so we can do the whitespace collapsing later.
-          const rawText = node.textContent;
-          return { text: insideTarget ? rawText : "", links: [] };
-        }
-
-        if (node.nodeType !== Node.ELEMENT_NODE) {
-          return { text: "", links: [] };
-        }
-
-        if (["SCRIPT", "STYLE", "NOSCRIPT"].includes(node.tagName)) {
-          return { text: "", links: [] };
-        }
-
-        const newInsideTarget = insideTarget || (node === targetElement);
-
-        if (node.tagName === "A") {
-          const aHref = node.getAttribute("href");
-          const aText = (node.innerText || "").replace(/[\u00A0\s]+/g, ' ').trim();
-          let aLinks = [];
-          if (aHref && !/^\/\//.test(aHref) && linkRegex.test(aHref)) {
-            const fullHref = aHref.startsWith("/") ? `${baseUrl}${aHref}` : aHref;
-          aLinks.push({ href: fullHref, text: aText });
-        }
-        return { text: newInsideTarget ? aText : "", links: aLinks };
-      }
-
-      let childText = "";
-      for (let i = 0; i < node.childNodes.length; i++) {
-        const result = traverse(node.childNodes[i], newInsideTarget);
-        childText += result.text;
-        links = links.concat(result.links);
-      }
-      return { text: childText, links: links };
-    }
-
-    const result = traverse(document.body, false);
-    result.text = result.text.replace(/[\u00A0\s]+/g, ' ').trim();
-    return result;
-  }""",
-      Array(regexString, target),
-    )
+    val result = page.evaluate("extractContent", Array(regexString, target))
     val resultMap = result.asInstanceOf[java.util.Map[String, Any]].asScala
     val text = resultMap("text").toString
     val links = resultMap("links")
