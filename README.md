@@ -19,3 +19,7 @@ It supports:
 
 This project is still under active development.
 You can try it out by running the tests provided in the tests/ folder to see the current scraping logic and data extraction behavior in action.
+
+🎥 Scrapiong in Action
+https://github.com/user-attachments/assets/2a466d0a-dacc-4478-b571-b12556a7bdc8
+
