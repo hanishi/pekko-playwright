@@ -45,7 +45,7 @@ private class PlaywrightWorker(
       browserContext: BrowserContext = browserContextFactory.create(),
       successCount: Int = 0,
   ): Behavior[ScrapePage] = Behaviors.receiveMessage {
-    case command @ ScrapePage(replyTo, url, targetElement, depth, attempt) =>
+    case command @ ScrapePage(replyTo, url, targetElements, depth, attempt) =>
       browserContext.clearCookies()
       val page = browserContext.newPage()
       Try {
@@ -58,17 +58,20 @@ private class PlaywrightWorker(
 //            else route.resume()
 //          },
 //        )
-        page.route("**", route => {
-          val req = route.request()
-          val url = req.url()
-          val resourceType = req.resourceType()
+        page.route(
+          "**",
+          route => {
+            val req = route.request()
+            val url = req.url()
+            val resourceType = req.resourceType()
 
-          if (resourceType == "image" || url.matches(".*\\.(png|jpe?g|webp|svg|gif)$")) {
-            route.abort()
-          } else {
-            route.resume()
-          }
-        })
+            if (
+              resourceType == "image" ||
+              url.matches(".*\\.(png|jpe?g|webp|svg|gif)$")
+            ) route.abort()
+            else route.resume()
+          },
+        )
 
 //        page.route("**", route => route.resume())
         val response = page.navigate(
@@ -86,9 +89,11 @@ private class PlaywrightWorker(
           Option(page.querySelector(selector))
             .foreach(el => if (el.isVisible) el.click())
         }
-        extractTextAndLinks(page, domainRegex + hostRegex, targetElement)
+        targetElements.map(targetElement =>
+          extractTextAndLinks(page, domainRegex + hostRegex, targetElement),
+        )
       } match {
-        case Success((text, links)) =>
+        case Success(results) =>
           page.close()
           val newSuccessCount = successCount + 1
           val (nextContext, resetCount) =
@@ -98,7 +103,10 @@ private class PlaywrightWorker(
               browserContext.close()
               (browserContextFactory.create(), 0)
             } else (browserContext, newSuccessCount)
-          replyTo ! PageScrapedResult(url, text, links, depth, 1)
+
+          val texts: Seq[String] = results.map(_._1).toSeq
+          val links: Seq[(String, String)] = results.flatMap(_._2).toSeq
+          replyTo ! PageScrapedResult(url, texts, links, depth, 1)
           processing(nextContext, resetCount)
         case Failure(e) =>
           page.close()
@@ -107,7 +115,7 @@ private class PlaywrightWorker(
             context.log
               .warn(s"Max retries reached for ${command.url}. Skipping.")
             replyTo !
-              PageScrapedResult(command.url, "", Seq.empty, command.depth, 0)
+              PageScrapedResult(command.url, Seq.empty, Seq.empty, command.depth, 0)
             processing()
           } else {
             browserContext.close()
@@ -147,7 +155,8 @@ object PlaywrightWorker:
   ): Behavior[ScrapePage] = Behaviors.setup[ScrapePage]: context =>
     Behaviors.withTimers: timers =>
 
-      val launchOptions = proxyConfigs.fold(BrowserType.LaunchOptions().setHeadless(true)) {
+      val launchOptions = proxyConfigs
+        .fold(BrowserType.LaunchOptions().setHeadless(true)) {
           proxyRoundRobin =>
             val nextProxy = proxyRoundRobin.next()
             context.log
@@ -200,14 +209,14 @@ object PlaywrightWorker:
   case class ScrapePage(
       replyTo: ActorRef[PageScrapedResult],
       url: String,
-      targetElement: String,
+      targetElements: Array[String],
       depth: Int,
       attempt: Int = 0,
   )
 
   case class PageScrapedResult(
       url: String,
-      content: String,
+      contents: Seq[String],
       links: Seq[(String, String)],
       depth: Int,
       status: Int,

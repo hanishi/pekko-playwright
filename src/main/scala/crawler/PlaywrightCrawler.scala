@@ -25,7 +25,7 @@ private class PlaywrightCrawler(
     depths: mutable.Map[Int, Int],
     domain: String,
     hostRegex: String,
-    targetElement: String,
+    targetElements: Array[String],
     clickSelector: Option[String],
 ):
 
@@ -70,7 +70,7 @@ private class PlaywrightCrawler(
           ScrapePage(
             context.self,
             url,
-            if depths.isEmpty then "body" else targetElement,
+            if depths.isEmpty then Array("body") else targetElements,
             depth,
           ),
         )
@@ -105,7 +105,7 @@ object PlaywrightCrawler:
       depths: mutable.Map[Int, Int],
       domain: String,
       hostRegex: String,
-      targetElement: String,
+      targetElements: Array[String],
       clickSelector: Option[String],
   ): Behavior[Command] = Behaviors.setup[CommandOrResponse] { context =>
     Behaviors.withStash(1000)(buffer =>
@@ -116,7 +116,7 @@ object PlaywrightCrawler:
         depths,
         domain,
         hostRegex,
-        targetElement,
+        targetElements,
         clickSelector,
       ).idle,
     )

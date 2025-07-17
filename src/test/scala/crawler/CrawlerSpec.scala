@@ -20,7 +20,12 @@ class CrawlerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike {
         5,
         "https://edition.cnn.com/sport",
         "\\/2025\\/07\\/\\d+\\/[^ ]*",
-        "body > div.layout__content-wrapper.layout-with-rail__content-wrapper > section.layout__wrapper.layout-with-rail__wrapper > section.layout__main-wrapper.layout-with-rail__main-wrapper > section.layout__main.layout-with-rail__main > article > section > main",
+        Array(
+          "body > div.layout__content-wrapper.layout-with-rail__content-wrapper > section.layout__top.layout-with-rail__top > div.headline.headline--has-lowertext",
+          "body > div.layout__content-wrapper.layout-with-rail__content-wrapper > " +
+            "section.layout__wrapper.layout-with-rail__wrapper > section.layout__main-wrapper.layout-with-rail__main-wrapper > " +
+            "section.layout__main.layout-with-rail__main > article > section > main",
+        ),
         testProbe.ref,
       ))
       while (true) {

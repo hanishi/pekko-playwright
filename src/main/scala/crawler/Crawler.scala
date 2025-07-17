@@ -29,7 +29,7 @@ object Crawler:
       concurrency: Int,
       seedUrl: String,
       hostRegex: String,
-      targetElement: String,
+      targetElements: Array[String],
       clickSelector: String,
       receiver: ActorRef[PageContent],
   ): Behavior[Command] = apply(
@@ -38,7 +38,7 @@ object Crawler:
     concurrency,
     seedUrl,
     hostRegex,
-    targetElement,
+    targetElements,
     Some(clickSelector),
     receiver: ActorRef[PageContent],
   )
@@ -49,7 +49,7 @@ object Crawler:
       concurrency: Int,
       seedUrl: String,
       hostRegex: String,
-      targetElement: String,
+      targetElements: Array[String],
       receiver: ActorRef[PageContent],
   ): Behavior[Command] = apply(
     domain,
@@ -57,7 +57,7 @@ object Crawler:
     concurrency,
     seedUrl,
     hostRegex,
-    targetElement,
+    targetElements,
     None,
     receiver: ActorRef[PageContent],
   )
@@ -68,7 +68,7 @@ object Crawler:
       concurrency: Int,
       seedUrl: String,
       hostRegex: String,
-      targetElement: String,
+      targetElements: Array[String],
       clickSelector: Option[String] = None,
       receiver: ActorRef[PageContent],
   ): Behavior[Command] = Behaviors
@@ -80,7 +80,7 @@ object Crawler:
           depths,
           domain,
           hostRegex,
-          targetElement,
+          targetElements,
           clickSelector,
         ))
 
@@ -139,14 +139,14 @@ private class Crawler(
         visitedUrls ++= filteredUrls
         running(inProgress + filteredUrls.size)
       }
-    case PageScrapedResult(url, content, links, depth, status) =>
+    case PageScrapedResult(url, contents, links, depth, status) =>
       val newLinks = links
         .collect { case (href, _) if !visitedUrls.contains(href) => href }
       context.log.info(s"Scraped $url at ${maxDepth - depth}. Found ${newLinks
           .size} new links. Status: $status")
       if (newLinks.nonEmpty && depth > 0) schedule(newLinks.toSet, depth - 1)
       else context.self ! CheckIfDone
-      receiver ! PageContent(url, content)
+      receiver ! PageContent(url, contents.mkString("\n"))
       running(inProgress - 1)
     case CheckIfDone =>
       if (inProgress == 0) {
