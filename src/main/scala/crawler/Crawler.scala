@@ -6,87 +6,37 @@ import scala.concurrent.duration.*
 import scala.util.Failure
 import scala.util.Random
 import scala.util.Success
-
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
-
 import crawler.Crawler.CheckIfDone
 import crawler.Crawler.Command
 import crawler.Crawler.PageContent
 import crawler.Crawler.StartCrawling
 import crawler.PlaywrightCrawler.StartScrape
 import crawler.PlaywrightWorker.PageScrapedResult
+import org.apache.pekko.http.scaladsl.model.Uri
 
 object Crawler:
 
   def apply(
-      domain: String,
-      maxDepth: Int,
-      concurrency: Int,
-      seedUrl: String,
-      hostRegex: String,
-      targetElements: Array[String],
-      clickSelector: String,
-      receiver: ActorRef[PageContent],
-  ): Behavior[Command] = apply(
-    domain,
-    maxDepth,
-    concurrency,
-    seedUrl,
-    hostRegex,
-    targetElements,
-    Some(clickSelector),
-    receiver: ActorRef[PageContent],
-  )
-
-  def apply(
-      domain: String,
-      maxDepth: Int,
-      concurrency: Int,
-      seedUrl: String,
-      hostRegex: String,
-      targetElements: Array[String],
-      receiver: ActorRef[PageContent],
-  ): Behavior[Command] = apply(
-    domain,
-    maxDepth,
-    concurrency,
-    seedUrl,
-    hostRegex,
-    targetElements,
-    None,
-    receiver: ActorRef[PageContent],
-  )
-
-  def apply(
-      domain: String,
-      maxDepth: Int,
-      concurrency: Int,
-      seedUrl: String,
-      hostRegex: String,
-      targetElements: Array[String],
-      clickSelector: Option[String] = None,
+      crawlerConfig: CrawlerConfig,
       receiver: ActorRef[PageContent],
   ): Behavior[Command] = Behaviors
     .setup[Command | PageScrapedResult] { context =>
       val depths = mutable.Map[Int, Int]()
       Behaviors.withTimers { timers =>
-        val crawler = context.spawnAnonymous(PlaywrightCrawler(
-          concurrency,
-          depths,
-          domain,
-          hostRegex,
-          targetElements,
-          clickSelector,
-        ))
+        val crawler = context
+          .spawnAnonymous(PlaywrightCrawler(depths, crawlerConfig))
 
+        val seedUrl = crawlerConfig.seedUrl
+        val maxDepth = crawlerConfig.maxDepth
         given ExecutionContext = context.executionContext
         given ActorSystem[_] = context.system
-        context.pipeToSelf(PlaywrightWorker.robotsTxt(java.net.URL(seedUrl))) {
+        context.pipeToSelf(PlaywrightWorker.robotsTxt(Uri(seedUrl))) {
           case Success(_) => StartCrawling(Set(seedUrl), maxDepth)
           case Failure(exception) =>
             context.log.error(s"Failed to fetch robots.txt: $exception")

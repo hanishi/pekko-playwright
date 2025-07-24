@@ -1,13 +1,11 @@
 package crawler
 
 import java.net.URL
-
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 import scala.util.*
-
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.Behavior
@@ -15,15 +13,13 @@ import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.http.scaladsl.Http
-import org.apache.pekko.http.scaladsl.model.HttpRequest
+import org.apache.pekko.http.scaladsl.model.{HttpRequest, Uri}
 import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshal
-
 import com.microsoft.playwright.*
 import com.microsoft.playwright.options.LoadState
 import com.microsoft.playwright.options.Proxy as PlaywrightProxy
 import com.microsoft.playwright.options.WaitUntilState
 import com.typesafe.config.ConfigFactory
-
 import crawler.PlaywrightWorker.PageScrapedResult
 import crawler.PlaywrightWorker.ScrapePage
 import crawler.PlaywrightWorker.extractTextAndLinks
@@ -194,10 +190,10 @@ object PlaywrightWorker:
     (text, links)
 
   def robotsTxt(
-      url: URL,
+      uri: Uri,
   )(using system: ActorSystem[_], ec: ExecutionContext): Future[Boolean] = {
 
-    val robotsUrl = s"${url.getProtocol}://${url.getHost}/robots.txt"
+    val robotsUrl = s"${uri.scheme}://${uri.authority.host}/robots.txt"
     val responseFuture = Http().singleRequest(HttpRequest(uri = robotsUrl))
     responseFuture.flatMap { response =>
       Unmarshal(response.entity).to[String].map { content =>

@@ -21,26 +21,26 @@ import crawler.PlaywrightWorker.*
 private class PlaywrightCrawler(
     context: ActorContext[CommandOrResponse],
     buffer: StashBuffer[CommandOrResponse],
-    concurrency: Int,
     depths: mutable.Map[Int, Int],
-    domain: String,
-    hostRegex: String,
-    targetElements: Array[String],
-    clickSelector: Option[String],
+    crawlerConfig: CrawlerConfig,
 ):
 
-  private val workerPool: PoolRouter[ScrapePage] = Routers.pool(concurrency) {
+  private val workerPool: PoolRouter[ScrapePage] = Routers
+    .pool(crawlerConfig.concurrency) {
 
-    Behaviors.supervise(PlaywrightWorker(domain, hostRegex, clickSelector))
-      .onFailure(SupervisorStrategy.restart)
-  }
+      Behaviors.supervise(PlaywrightWorker(
+        crawlerConfig.domain,
+        crawlerConfig.hostRegex,
+        crawlerConfig.clickSelector,
+      )).onFailure(SupervisorStrategy.restart)
+    }
   private val workerRouter: ActorRef[ScrapePage] = context
     .spawn(workerPool, "worker-pool")
 
   private def idle: Behavior[CommandOrResponse] = Behaviors.receiveMessage {
     case StartScrape(replyTo, urls, depth) =>
       context.log.info(s"Starting scrape of ${urls
-          .size} URLs with concurrency=$concurrency.")
+          .size} URLs with concurrency=$crawlerConfig.concurrency.")
       runScrape(urls, depth, replyTo)
     case other =>
       buffer.stash(other)
@@ -58,7 +58,7 @@ private class PlaywrightCrawler(
     if (urls.isEmpty && inFlight == 0) buffer.unstashAll(idle)
     else {
       val (urlsToProcess, remaining) = urls
-        .splitAt(max(0, concurrency - inFlight))
+        .splitAt(max(0, crawlerConfig.concurrency - inFlight))
 
       urlsToProcess.foreach { url =>
         // this is experimental, but it helps to avoid overwhelming the target server?
@@ -70,7 +70,8 @@ private class PlaywrightCrawler(
           ScrapePage(
             context.self,
             url,
-            if depths.isEmpty then Array("body") else targetElements,
+            if depths.isEmpty then Array("body")
+            else crawlerConfig.targetElements,
             depth,
           ),
         )
@@ -100,25 +101,13 @@ private class PlaywrightCrawler(
 object PlaywrightCrawler:
 
   private type CommandOrResponse = Command | PageScrapedResult
+
   def apply(
-      concurrency: Int,
       depths: mutable.Map[Int, Int],
-      domain: String,
-      hostRegex: String,
-      targetElements: Array[String],
-      clickSelector: Option[String],
+      crawlerConfig: CrawlerConfig,
   ): Behavior[Command] = Behaviors.setup[CommandOrResponse] { context =>
     Behaviors.withStash(1000)(buffer =>
-      new PlaywrightCrawler(
-        context,
-        buffer,
-        concurrency,
-        depths,
-        domain,
-        hostRegex,
-        targetElements,
-        clickSelector,
-      ).idle,
+      new PlaywrightCrawler(context, buffer, depths, crawlerConfig).idle,
     )
   }.narrow
 
