@@ -19,12 +19,10 @@ class PublisherSiteSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike {
         seedUrl = "https://edition.cnn.com/sport",
         hostRegex = "\\/2025\\/07\\/\\d+\\/[^ ]*",
         targetElements = Array(
-          "body > div.layout__content-wrapper.layout-with-rail__content-wrapper > section.layout__top.layout-with-rail__top > div.headline.headline--has-lowertext",
-          "body > div.layout__content-wrapper.layout-with-rail__content-wrapper > " +
-            "section.layout__wrapper.layout-with-rail__wrapper > section.layout__main-wrapper.layout-with-rail__main-wrapper > " +
-            "section.layout__main.layout-with-rail__main > article > section > main",
+          "#maincontent",
+          "body > div.layout-article-elevate__content-wrapper.layout__content-wrapper > section.layout__wrapper.layout-article-elevate__wrapper > section.layout__main.layout-article-elevate__main > section.layout__center.layout-article-elevate__center > article > section > main > div.article__content-container"
         ),
-        cronSchedule = "0 28 1 * * ?",
+        cronSchedule = "0 46 8 * * ?", // every day at 8:10 AM
       ),
       OpenAIConfig(
         apiKey =
