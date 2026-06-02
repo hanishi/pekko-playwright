@@ -10,15 +10,8 @@
         </encoder>
     </appender>
 
-    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
-        <file>target/myapp-dev.log</file>
-        <encoder>
-            <pattern>[%date{ISO8601}] [%level] [%logger] [%marker] [%thread] - %msg MDC: {%mdc}%n</pattern>
-        </encoder>
-    </appender>
-
-    <root level="DEBUG">
+    <!-- Console-only: container- and CLI-friendly (logs to stdout, no files). -->
+    <root level="INFO">
         <appender-ref ref="STDOUT"/>
-        <appender-ref ref="FILE"/>
     </root>
 </configuration>

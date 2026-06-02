@@ -1,0 +1,9 @@
+target/
+**/target/
+.git/
+.idea/
+.bsp/
+.metals/
+.bloop/
+out/
+*.csv

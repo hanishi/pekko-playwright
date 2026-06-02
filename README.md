@@ -18,26 +18,41 @@ It supports:
 
 ## 🚀 Running
 
-The crawler is a one-shot app: it crawls the configured seed, prints each scraped page, and exits when the crawl completes.
+The crawler is a one-shot app: it crawls the configured seed, writes each scraped page to a two-column (`url,text`) CSV, and exits when the crawl completes.
+
+### With Docker (recommended — no JVM or browser setup)
+
+The [`Dockerfile`](Dockerfile) is a multi-stage build on Microsoft's Playwright base image, so Chromium and its system libraries are already inside — nothing to download at runtime.
 
 ```bash
-# Crawl the seed configured in application.conf
-sbt run
+# Build the image
+docker build -t pekko-crawler:latest .
 
-# Override the seed URL (domain is re-derived from the URL host)
-sbt "run https://edition.cnn.com/business"
+# Crawl and write the CSV to ./out on the host
+mkdir -p out
+docker run --rm --ipc=host -v "$PWD/out:/data" pekko-crawler:latest \
+  https://edition.cnn.com/business 2
 
-# Override the seed URL and max depth
-sbt "run https://edition.cnn.com/business 2"
+# -> out/crawler-output.csv
 ```
 
-> **First run note:** Playwright downloads the Chromium binary into `~/.cache/ms-playwright` on first launch, which can take a few minutes. Subsequent runs start immediately.
+Args are `[seed-url] [max-depth] [output-csv]`; `--ipc=host` is recommended so Chromium doesn't run out of `/dev/shm`. The container sets `CHROMIUM_NO_SANDBOX=true` and defaults the CSV to `/data/crawler-output.csv` (mount `/data` to keep it).
+
+### With sbt
+
+```bash
+sbt run                                          # config defaults
+sbt "run https://edition.cnn.com/business"       # override seed URL
+sbt "run https://edition.cnn.com/business 2"     # + max depth
+sbt "run https://edition.cnn.com/business 2 out.csv"  # + output path
+```
+
+> **First run note (sbt only):** Playwright downloads the Chromium binary into `~/.cache/ms-playwright` on first launch, which can take a few minutes. Subsequent runs start immediately. (The Docker image has it preinstalled.)
 
 ### Requirements
 
-- JDK 21+
-- sbt 1.10+
-- Scala 3.3.4 / Pekko 1.1.5 / Playwright 1.53.0 (managed by the build)
+- **Docker** — only Docker is needed for the image.
+- **sbt** path: JDK 21+, sbt 1.10+ (Scala 3.3.4 / Pekko 1.1.5 / Playwright 1.53.0 are managed by the build).
 
 ---
 
@@ -45,18 +60,61 @@ sbt "run https://edition.cnn.com/business 2"
 
 All settings live under the `crawler` block in [`src/main/resources/application.conf`](src/main/resources/application.conf):
 
-| Key | Meaning |
-| --- | --- |
-| `seed-url` | Where the crawl starts (overridable via CLI arg). |
-| `domain` | Site domain used to build the link-acceptance regex. |
-| `max-depth` | BFS crawl depth (overridable via CLI arg). |
-| `concurrency` | In-flight page cap against the shared browser pool (not a browser count). |
-| `host-regex` | Regex a discovered link's path must match to be followed. |
-| `target-elements` | CSS selectors whose text is scraped; links inside them are the crawl frontier. |
-| `click-selector` | *(optional)* element to click before scraping. |
-| `cron-schedule` | Read for completeness; unused in one-shot mode. |
-| `browser-pool.size` | Number of pinned Chromium processes (default `4`). |
-| `useProxy` / `proxyProviders` | Optional per-session proxy rotation. |
+| Key | Env override | Meaning |
+| --- | --- | --- |
+| `seed-url` | `CRAWLER_SEED_URL` | Where the crawl starts (also CLI arg 0). |
+| `domain` | `CRAWLER_DOMAIN` | Site domain used to build the link-acceptance regex. |
+| `max-depth` | `CRAWLER_MAX_DEPTH` | BFS crawl depth (also CLI arg 1). |
+| `concurrency` | `CRAWLER_CONCURRENCY` | In-flight page cap against the shared browser pool (not a browser count). |
+| `host-regex` | `CRAWLER_HOST_REGEX` | Regex a discovered link's path must match to be followed. Varies per site. |
+| `target-elements` | *(conf only)* | CSS selectors whose text is scraped; links inside them are the crawl frontier. |
+| `click-selector` | `CRAWLER_CLICK_SELECTOR` | *(optional)* element to click before scraping. |
+| `output-csv` | `CRAWLER_OUTPUT` | CSV output path (also CLI arg 2). |
+| `browser-pool.size` | `CRAWLER_BROWSER_POOL_SIZE` | Number of pinned Chromium processes (default `4`). |
+| `useProxy` / `proxyProviders` | `CRAWLER_USE_PROXY` | Optional per-session proxy rotation (`proxyProviders` is conf only). |
+
+### Overriding settings per run
+
+You don't need to edit `application.conf` (or rebuild the image) to retarget a
+crawl. Precedence, low → high: **bundled defaults < `CRAWLER_*` env vars <
+external conf file (`CRAWLER_CONFIG`) < CLI args**.
+
+**Env vars** — quick one-offs (see the table above). Note `CRAWLER_HOST_REGEX`
+is a literal JS `RegExp`, so use **single** backslashes (unlike the
+double-escaped form in `application.conf`):
+
+```bash
+docker run --rm --ipc=host -v "$PWD/out:/data" \
+  -e CRAWLER_HOST_REGEX='\/tech\/[^ ]*' \
+  pekko-crawler:latest https://www.theverge.com/tech 2
+```
+
+**External conf file** — best for many settings or list-valued ones like
+`target-elements`. Point `CRAWLER_CONFIG` at a HOCON file; it's overlaid on the
+bundled defaults, so a partial file is fine (omitted keys keep their defaults):
+
+```hocon
+# my-crawl.conf
+crawler {
+  seed-url        = "https://www.theverge.com/tech"
+  domain          = "theverge.com"
+  max-depth       = 2
+  host-regex      = "\\/tech\\/[^ ]*"   # HOCON: double-escape backslashes
+  target-elements = ["article", "main"]
+}
+```
+
+```bash
+# Docker — mount the file and point CRAWLER_CONFIG at it
+docker run --rm --ipc=host -v "$PWD/out:/data" -v "$PWD/my-crawl.conf:/cfg.conf" \
+  -e CRAWLER_CONFIG=/cfg.conf pekko-crawler:latest
+
+# sbt
+CRAWLER_CONFIG=my-crawl.conf sbt run
+```
+
+The startup log prints the effective `seed`, `domain`, `maxDepth`,
+`concurrency`, and `hostRegex`, so you can confirm what's actually in effect.
 
 ---
 
@@ -86,13 +144,3 @@ sbt "testOnly crawler.UrlNormalizerSpec crawler.RobotsTxtParserSpec crawler.pool
 `ResourcePoolSpec` asserts the key property — work runs on the resource's construction thread — plus round-robin routing, `submitTo`/`submitAll`, failure propagation, and close-on-stop.
 
 To watch the full pipeline end-to-end against a real site, just run the app (`sbt run`).
-
-🎥 **Scraping in action:**
-
-https://github.com/user-attachments/assets/2a466d0a-dacc-4478-b571-b12556a7bdc8
-
----
-
-## 🚧 Status
-
-Active work in progress. The crawler core and thread-affine browser pool are functional and tested.

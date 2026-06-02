@@ -12,7 +12,6 @@ case class CrawlerConfig(
     hostRegex: String,
     targetElements: Array[String],
     clickSelector: Option[String] = None,
-    cronSchedule: String = "0 0 * * *" // Default to run every day at midnight,
 )
 
 object CrawlerConfig:
@@ -32,6 +31,4 @@ object CrawlerConfig:
       targetElements = c.getStringList("target-elements").asScala.toArray,
       clickSelector =
         if c.hasPath("click-selector") then Some(c.getString("click-selector")) else None,
-      cronSchedule =
-        if c.hasPath("cron-schedule") then c.getString("cron-schedule") else "0 0 * * *",
     )

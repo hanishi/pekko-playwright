@@ -14,6 +14,10 @@ run / fork := true
 Compile / run / fork := true
 Compile / mainClass := Some("crawler.Main")
 
+// `sbt stage` produces target/universal/stage/{bin,lib}; the multi-stage
+// Dockerfile copies that onto Microsoft's Playwright image. See Dockerfile.
+enablePlugins(JavaAppPackaging)
+
 libraryDependencies ++= Seq(
   "org.apache.pekko" %% "pekko-actor-typed" % pekkoVersion,
   "org.apache.pekko" %% "pekko-http" % pekkoHttpVersion,
