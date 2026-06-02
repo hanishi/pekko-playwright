@@ -21,6 +21,7 @@ import dast.InjectionPoint
 import dast.LlmDecision
 import dast.LlmDecision.*
 import dast.Markers
+import dast.SinkScanOp
 import dast.Tier1
 import dast.analyzer.AnalyzerContext
 
@@ -49,16 +50,23 @@ object ScanOrchestrator:
   /** The scan result: every finding (Tier 1 + confirmed probes). */
   final case class ScanComplete(target: String, findings: Vector[Finding])
 
-  /** The browser/model effects, injected for testability. */
+  /** The browser/model effects, injected for testability. `sinkScan` delivers a
+    * benign marker through a source and returns the DOM sinks it reached.
+    */
   final case class Effects(
       capture: String => Future[ClientStateSnapshot],
       analyze: AnalyzerContext => Future[LlmDecision],
       probe: (String, InjectionPoint, String, String) => Future[Option[Finding]],
+      sinkScan: (String, InjectionPoint, String) => Future[Set[String]],
   )
 
   private final case class SnapshotReady(snapshot: ClientStateSnapshot)
       extends Command
   private final case class CaptureFailed(reason: String) extends Command
+  private final case class SinkScanReady(
+      snapshot: ClientStateSnapshot,
+      sinks: Set[String],
+  ) extends Command
   private final case class DecisionReady(decision: LlmDecision) extends Command
   private final case class ProbeResult(finding: Option[Finding]) extends Command
 
@@ -112,10 +120,28 @@ private class ScanOrchestrator(
   private def awaitingCapture: Behavior[Command] = Behaviors
     .receiveMessagePartial {
       case SnapshotReady(snapshot) =>
-        step(snapshot, Tier1.run(snapshot).toVector, maxSteps)
+        val tier1 = Tier1.run(snapshot).toVector
+        // A DOM sink-scan is active work (it injects a marker), so it only runs
+        // under an authorized active scope; otherwise go straight to the loop.
+        ConsentGate.decide(auth, ActionClass.Active, target) match
+          case GateDecision.Permit =>
+            ctx.pipeToSelf(
+              effects.sinkScan(target, InjectionPoint.Fragment, freshMarker()),
+            ) {
+              case Success(sinks) => SinkScanReady(snapshot, sinks)
+              case Failure(_) => SinkScanReady(snapshot, Set.empty)
+            }
+            awaitingSinkScan(tier1)
+          case GateDecision.Deny(_) => step(snapshot, tier1, maxSteps)
       case CaptureFailed(reason) =>
         ctx.log.warn("Capture failed for {}: {}", target, reason)
         finish(Vector.empty)
+    }
+
+  private def awaitingSinkScan(tier1: Vector[Finding]): Behavior[Command] =
+    Behaviors.receiveMessagePartial { case SinkScanReady(snapshot, sinks) =>
+      val dom = SinkScanOp.toFindings(InjectionPoint.Fragment, sinks).toVector
+      step(snapshot, tier1 ++ dom, maxSteps)
     }
 
   private def step(

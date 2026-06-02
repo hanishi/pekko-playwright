@@ -42,10 +42,13 @@ class ScanOrchestratorSpec
   private def effects(
       analyze: AnalyzerCtxF,
       probe: (String, InjectionPoint, String, String) => Future[Option[Finding]],
+      sinkScan: (String, InjectionPoint, String) => Future[Set[String]] =
+        (_, _, _) => Future.successful(Set.empty),
   ): Effects = Effects(
     capture = _ => Future.successful(snapshot),
     analyze = analyze,
     probe = probe,
+    sinkScan = sinkScan,
   )
 
   private type AnalyzerCtxF =
@@ -113,6 +116,23 @@ class ScanOrchestratorSpec
       probeCalls.get() shouldBe 2
     }
 
+    "run a DOM sink-scan under active auth and report reached sinks" in {
+      val orch = spawn(ScanOrchestrator(
+        Authorization.active("example.com"),
+        effects(
+          analyze = _ => Future.successful(Done), // no reflected probing this run
+          probe = (_, _, _, _) => Future.successful(None),
+          sinkScan = (_, _, _) => Future.successful(Set("innerHTML")),
+        ),
+      ))
+      val reply = createTestProbe[ScanComplete]()
+
+      orch ! Start(target, reply.ref)
+      val expected = tier1 ++
+        SinkScanOp.toFindings(InjectionPoint.Fragment, Set("innerHTML"))
+      reply.expectMessageType[ScanComplete].findings shouldBe expected
+    }
+
     "finish with no findings when capture fails" in {
       val orch = spawn(ScanOrchestrator(
         Authorization.ObserveOnly,
@@ -120,6 +140,7 @@ class ScanOrchestratorSpec
           capture = _ => Future.failed(new RuntimeException("boom")),
           analyze = _ => Future.successful(Done),
           probe = (_, _, _, _) => Future.successful(None),
+          sinkScan = (_, _, _) => Future.successful(Set.empty),
         ),
       ))
       val reply = createTestProbe[ScanComplete]()

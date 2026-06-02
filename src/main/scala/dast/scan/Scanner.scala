@@ -13,6 +13,7 @@ import crawler.pool.ResourcePool.submit
 import dast.Authorization
 import dast.CaptureOp
 import dast.ProbeOp
+import dast.SinkScanOp
 import dast.analyzer.ClaudeAnalyzer
 
 /** Assembles the real, pool- and Claude-backed [[ScanOrchestrator.Effects]] and
@@ -68,6 +69,9 @@ object Scanner:
         pool.submit(r =>
           ProbeOp.probe(r, auth, baseUrl, point, payloadId, marker, navTimeoutMs),
         ).map(_.toOption.flatten),
+      sinkScan = (baseUrl, source, marker) =>
+        pool
+          .submit(r => SinkScanOp.scan(r, baseUrl, source, marker, navTimeoutMs)),
     )
 
     ctx.spawn(ScanOrchestrator(auth, effects), "dast-scan-orchestrator")
