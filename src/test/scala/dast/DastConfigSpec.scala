@@ -25,10 +25,8 @@ class DastConfigSpec extends AnyWordSpec with Matchers {
         """export ANTHROPIC_API_KEY="sk-ant-xyz"
           |NOTE='hello world'
           |""".stripMargin
-      DastConfig.parse(content) shouldBe Map(
-        "ANTHROPIC_API_KEY" -> "sk-ant-xyz",
-        "NOTE" -> "hello world",
-      )
+      DastConfig.parse(content) shouldBe
+        Map("ANTHROPIC_API_KEY" -> "sk-ant-xyz", "NOTE" -> "hello world")
     }
 
     "keep '=' that appears in the value" in {

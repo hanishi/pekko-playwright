@@ -13,26 +13,26 @@ import scala.util.Try
 object DastConfig:
 
   /** Parse dotenv content: `KEY=value` per line, `#` comments and blanks
-    * ignored, optional leading `export `, surrounding quotes stripped. Pure. */
-  private[dast] def parse(content: String): Map[String, String] =
-    content.linesIterator.map(_.trim)
-      .filter(l => l.nonEmpty && !l.startsWith("#"))
-      .flatMap { raw =>
-        val line = if raw.startsWith("export ") then raw.drop(7).trim else raw
-        line.split("=", 2) match
-          case Array(k, v) if k.trim.nonEmpty => Some(k.trim -> unquote(v.trim))
-          case _                              => None
-      }
-      .toMap
+    * ignored, optional leading `export `, surrounding quotes stripped. Pure.
+    */
+  private[dast] def parse(content: String): Map[String, String] = content
+    .linesIterator.map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#"))
+    .flatMap { raw =>
+      val line = if raw.startsWith("export ") then raw.drop(7).trim else raw
+      line.split("=", 2) match
+        case Array(k, v) if k.trim.nonEmpty => Some(k.trim -> unquote(v.trim))
+        case _ => None
+    }.toMap
 
   private def unquote(s: String): String =
-    if s.length >= 2 && ((s.startsWith("\"") && s.endsWith("\"")) ||
+    if s.length >= 2 &&
+      ((s.startsWith("\"") && s.endsWith("\"")) ||
         (s.startsWith("'") && s.endsWith("'")))
     then s.substring(1, s.length - 1)
     else s
 
-  private def envFilePath: String =
-    sys.env.get("DAST_ENV_FILE").map(_.trim).filter(_.nonEmpty).getOrElse(".env.local")
+  private def envFilePath: String = sys.env.get("DAST_ENV_FILE").map(_.trim)
+    .filter(_.nonEmpty).getOrElse(".env.local")
 
   private lazy val fromFile: Map[String, String] =
     val f = new java.io.File(envFilePath)
@@ -45,9 +45,9 @@ object DastConfig:
       }.getOrElse(Map.empty)
 
   /** First non-empty of: env var, dotenv file, system property. */
-  def get(name: String): Option[String] =
-    sys.env.get(name).orElse(fromFile.get(name)).orElse(sys.props.get(name))
-      .map(_.trim).filter(_.nonEmpty)
+  def get(name: String): Option[String] = sys.env.get(name)
+    .orElse(fromFile.get(name)).orElse(sys.props.get(name)).map(_.trim)
+    .filter(_.nonEmpty)
 
-  def getInt(name: String, default: Int): Int =
-    get(name).flatMap(_.toIntOption).getOrElse(default)
+  def getInt(name: String, default: Int): Int = get(name).flatMap(_.toIntOption)
+    .getOrElse(default)

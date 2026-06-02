@@ -100,6 +100,7 @@ object ClaudeAnalyzer:
         log.warn("ANTHROPIC_API_KEY not set (env or .env.local); analyzer failing closed to Done")
         Future.successful(LlmDecision.Done)
       case Some(apiKey) =>
+        log.info("Calling Claude ({}). Prompt sent:\n{}", model, context.render)
         val request = HttpRequest(
           method = HttpMethods.POST,
           uri = Endpoint,
@@ -115,8 +116,10 @@ object ClaudeAnalyzer:
         Http()(system).singleRequest(request).flatMap { response =>
           if response.status.isSuccess() then
             Unmarshal(response.entity).to[String].map { raw =>
-              Try(ujson.read(raw)).toOption
+              val decision = Try(ujson.read(raw)).toOption
                 .fold(LlmDecision.Done)(responseToDecision)
+              log.info("Claude returned decision: {}", decision)
+              decision
             }
           else
             response.entity.discardBytes()

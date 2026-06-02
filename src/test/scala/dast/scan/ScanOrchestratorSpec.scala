@@ -97,12 +97,15 @@ class ScanOrchestratorSpec
       done.findings shouldBe (tier1 :+ probeFinding)
     }
 
-    "stop at the step budget when the analyzer never says Done" in {
+    "stop at the step budget when the analyzer keeps choosing new probes" in {
       val probeCalls = new AtomicInteger(0)
       val orch = spawn(ScanOrchestrator(
         Authorization.active("example.com"),
         effects(
-          analyze = _ => Future.successful(Probe("q", "img-onerror")),
+          // A distinct payload each step so no probe is ever a repeat; the loop
+          // is then bounded only by the step budget.
+          analyze =
+            _ => Future.successful(Probe("q", s"payload-${probeCalls.get()}")),
           probe = (_, _, _, _) => {
             probeCalls.incrementAndGet(); Future.successful(None)
           },
@@ -114,6 +117,28 @@ class ScanOrchestratorSpec
       orch ! Start(target, reply.ref)
       reply.expectMessageType[ScanComplete].findings shouldBe tier1
       probeCalls.get() shouldBe 2
+    }
+
+    "not re-probe a repeated decision: finish early and record it once" in {
+      val probeCalls = new AtomicInteger(0)
+      val orch = spawn(ScanOrchestrator(
+        Authorization.active("example.com"),
+        effects(
+          // Always the same probe; once attempted, the orchestrator finishes
+          // instead of re-confirming, so the finding is recorded exactly once.
+          analyze = _ => Future.successful(Probe("q", "img-onerror")),
+          probe = (_, _, _, _) => {
+            probeCalls.incrementAndGet(); Future.successful(Some(probeFinding))
+          },
+        ),
+        maxSteps = 5,
+      ))
+      val reply = createTestProbe[ScanComplete]()
+
+      orch ! Start(target, reply.ref)
+      reply.expectMessageType[ScanComplete].findings shouldBe
+        (tier1 :+ probeFinding)
+      probeCalls.get() shouldBe 1
     }
 
     "run a DOM sink-scan under active auth and report reached sinks" in {

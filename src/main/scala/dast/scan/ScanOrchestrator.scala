@@ -120,6 +120,14 @@ private class ScanOrchestrator(
   private def awaitingCapture: Behavior[Command] = Behaviors
     .receiveMessagePartial {
       case SnapshotReady(snapshot) =>
+        ctx.log.info(
+          "Captured {}: {} cookie(s) [{}], {} localStorage, {} sessionStorage key(s)",
+          target,
+          snapshot.cookies.size,
+          snapshot.cookies.map(_.name).mkString(", "),
+          snapshot.localStorage.size,
+          snapshot.sessionStorage.size,
+        )
         val tier1 = Tier1.run(snapshot).toVector
         // A DOM sink-scan is active work (it injects a marker), so it only runs
         // under an authorized active scope; otherwise go straight to the loop.
@@ -145,53 +153,99 @@ private class ScanOrchestrator(
   private def awaitingSinkScan(tier1: Vector[Finding]): Behavior[Command] =
     Behaviors.receiveMessagePartial { case SinkScanReady(snapshot, sinks) =>
       val dom = SinkScanOp.toFindings(InjectionPoint.Fragment, sinks).toVector
-      step(snapshot, tier1 ++ dom, maxSteps)
+      step(snapshot, tier1 ++ dom, maxSteps, Set.empty)
     }
 
   private def step(
       snapshot: ClientStateSnapshot,
       findings: Vector[Finding],
       budget: Int,
+      attempted: Set[(String, String)],
   ): Behavior[Command] =
     if budget <= 0 then finish(findings)
     else
+      val points = injectionPointsOf(target)
+      ctx.log.info(
+        "Asking analyzer (step {}/{}) for {}: injection points [{}]",
+        maxSteps - budget + 1,
+        maxSteps,
+        target,
+        points.mkString(", "),
+      )
       val context = AnalyzerContext
-        .fromSnapshot(snapshot, injectionPointIds = injectionPointsOf(target))
+        .fromSnapshot(snapshot, injectionPointIds = points)
       ctx.pipeToSelf(effects.analyze(context)) {
         case Success(d) => DecisionReady(d)
         case Failure(_) => DecisionReady(LlmDecision.Done) // fail closed
       }
-      awaitingDecision(snapshot, findings, budget)
+      awaitingDecision(snapshot, findings, budget, attempted)
 
   private def awaitingDecision(
       snapshot: ClientStateSnapshot,
       findings: Vector[Finding],
       budget: Int,
+      attempted: Set[(String, String)],
   ): Behavior[Command] = Behaviors.receiveMessagePartial {
-    case DecisionReady(Done) => finish(findings)
+    case DecisionReady(Done) =>
+      ctx.log.info("Analyzer decided: Done for {}", target)
+      finish(findings)
     case DecisionReady(Probe(injectionPointId, payloadId)) =>
-      ConsentGate.decide(auth, ActionClass.Active, target) match
-        case GateDecision.Permit =>
-          val point = InjectionPoint.QueryParam(injectionPointId)
-          ctx.pipeToSelf(effects.probe(target, point, payloadId, freshMarker())) {
-            case Success(f) => ProbeResult(f)
-            case Failure(_) => ProbeResult(None)
-          }
-          awaitingProbe(snapshot, findings, budget)
-        case GateDecision.Deny(reason) =>
-          ctx.log.info("Probe denied for {}: {}", target, reason)
-          step(snapshot, findings, budget - 1)
-    case DecisionReady(_) => // Navigate / Classify: acknowledged, no state change this slice
-      step(snapshot, findings, budget - 1)
+      ctx.log.info(
+        "Analyzer decided: Probe param '{}' with payload '{}' on {}",
+        injectionPointId,
+        payloadId,
+        target,
+      )
+      val key = (injectionPointId, payloadId)
+      if attempted.contains(key) then
+        // The analyzer re-selected a probe we already ran; it has converged
+        // with nothing new to try, so finish rather than burn the budget
+        // re-confirming the same finding.
+        ctx.log.info(
+          "Probe '{}'/'{}' already attempted on {}; finishing",
+          injectionPointId,
+          payloadId,
+          target,
+        )
+        finish(findings)
+      else
+        ConsentGate.decide(auth, ActionClass.Active, target) match
+          case GateDecision.Permit =>
+            val point = InjectionPoint.QueryParam(injectionPointId)
+            ctx.pipeToSelf(effects.probe(target, point, payloadId, freshMarker())) {
+              case Success(f) => ProbeResult(f)
+              case Failure(_) => ProbeResult(None)
+            }
+            awaitingProbe(snapshot, findings, budget, attempted + key)
+          case GateDecision.Deny(reason) =>
+            ctx.log.info("Probe denied for {}: {}", target, reason)
+            step(snapshot, findings, budget - 1, attempted + key)
+    case DecisionReady(other) => // Navigate / Classify: acknowledged, no state change this slice
+      ctx.log.info(
+        "Analyzer decided: {} for {} (no action this slice)",
+        other,
+        target,
+      )
+      step(snapshot, findings, budget - 1, attempted)
   }
 
   private def awaitingProbe(
       snapshot: ClientStateSnapshot,
       findings: Vector[Finding],
       budget: Int,
+      attempted: Set[(String, String)],
   ): Behavior[Command] = Behaviors
     .receiveMessagePartial { case ProbeResult(found) =>
-      step(snapshot, findings ++ found.toVector, budget - 1)
+      found match
+        case Some(f) => ctx.log
+            .info("Probe CONFIRMED on {}: {}", target, f.evidence)
+        case None => ctx.log
+            .info("Probe not confirmed on {} (no execution)", target)
+      // Dedupe by replay handle so the same finding is never recorded twice.
+      val merged = found.toVector.foldLeft(findings)((acc, f) =>
+        if acc.exists(_.replay == f.replay) then acc else acc :+ f,
+      )
+      step(snapshot, merged, budget - 1, attempted)
     }
 
   private def finish(findings: Vector[Finding]): Behavior[Command] =

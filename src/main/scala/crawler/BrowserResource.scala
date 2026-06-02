@@ -135,12 +135,14 @@ final class BrowserResource(
     try {
       val response = page.navigate(
         url,
-        new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED)
+        new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD)
           .setTimeout(settings.navigationTimeoutMs),
       )
       Option(response)
         .getOrElse(throw new RuntimeException(s"No response received for $url"))
-      page.waitForLoadState(LoadState.DOMCONTENTLOADED)
+      // Wait for full `load` (not just domcontentloaded) so cookies/storage set
+      // during the page load are visible to a passive capture.
+      page.waitForLoadState(LoadState.LOAD)
       op(page)
     } finally
       try page.close()
