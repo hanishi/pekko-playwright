@@ -7,6 +7,7 @@ import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 
 import dast.Authorization
+import dast.DastConfig
 import dast.scan.ScanOrchestrator.ScanComplete
 import dast.scan.ScanOrchestrator.Start
 
@@ -31,13 +32,14 @@ object ScannerMain:
     case Some(target) =>
       ActorSystem(guardian(target, authorization), "dast-scanner")
 
-  /** Per-navigation timeout in ms; override with DAST_NAV_TIMEOUT_MS. */
-  private def navTimeoutMs: Int = sys.env.get("DAST_NAV_TIMEOUT_MS")
-    .flatMap(_.toIntOption).getOrElse(30000)
+  /** Per-navigation timeout in ms (env or .env.local: DAST_NAV_TIMEOUT_MS). */
+  private def navTimeoutMs: Int = DastConfig.getInt("DAST_NAV_TIMEOUT_MS", 30000)
 
-  /** Active scope from DAST_AUTHORIZED_HOSTS; observe-only when unset. */
-  private def authorization: Authorization = sys.env.get("DAST_AUTHORIZED_HOSTS")
-    .map(_.trim).filter(_.nonEmpty) match
+  /** Active scope from DAST_AUTHORIZED_HOSTS (env or .env.local); observe-only
+    * when unset.
+    */
+  private def authorization: Authorization = DastConfig
+    .get("DAST_AUTHORIZED_HOSTS") match
     case Some(hosts) => Authorization
         .active(hosts.split(",").map(_.trim).toIndexedSeq*)
     case None => Authorization.ObserveOnly

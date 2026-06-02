@@ -26,10 +26,14 @@ object SiteScanOrchestrator:
   sealed trait Command
 
   /** Begin a site scan from `seed`; the aggregate goes to `replyTo`. */
-  final case class Start(seed: String, replyTo: ActorRef[SiteScanComplete]) extends Command
+  final case class Start(seed: String, replyTo: ActorRef[SiteScanComplete])
+      extends Command
 
   /** Findings grouped per scanned URL (seed first). */
-  final case class SiteScanComplete(seed: String, results: Vector[(String, Vector[Finding])])
+  final case class SiteScanComplete(
+      seed: String,
+      results: Vector[(String, Vector[Finding])],
+  )
 
   /** Injected effects, for testability. */
   final case class Effects(
@@ -39,10 +43,11 @@ object SiteScanOrchestrator:
 
   private final case class Discovered(urls: Seq[String]) extends Command
   private final case class DiscoverFailed(reason: String) extends Command
-  private final case class Scanned(url: String, findings: Vector[Finding]) extends Command
+  private final case class Scanned(url: String, findings: Vector[Finding])
+      extends Command
 
-  def apply(effects: Effects, maxPages: Int = 20): Behavior[Command] =
-    Behaviors.setup { ctx =>
+  def apply(effects: Effects, maxPages: Int = 20): Behavior[Command] = Behaviors
+    .setup { ctx =>
       Behaviors.receiveMessagePartial { case Start(seed, replyTo) =>
         new SiteScanOrchestrator(ctx, effects, maxPages, seed, replyTo).begin()
       }
@@ -62,41 +67,51 @@ private class SiteScanOrchestrator(
   def begin(): Behavior[Command] =
     ctx.pipeToSelf(effects.discover(seed)) {
       case Success(urls) => Discovered(urls)
-      case Failure(e)    => DiscoverFailed(Option(e.getMessage).getOrElse(e.toString))
+      case Failure(e) =>
+        DiscoverFailed(Option(e.getMessage).getOrElse(e.toString))
     }
     awaitingDiscovery
 
-  private def awaitingDiscovery: Behavior[Command] = Behaviors.receiveMessagePartial {
-    case Discovered(urls) =>
-      scanNext(Scope.frontier(seed, urls, maxPages), Vector.empty)
-    case DiscoverFailed(reason) =>
-      // Fall back to scanning just the seed rather than aborting.
-      ctx.log.warn("Discovery failed for {}: {}; scanning seed only", seed, reason)
-      scanNext(Scope.frontier(seed, Seq.empty, maxPages), Vector.empty)
-  }
+  private def awaitingDiscovery: Behavior[Command] = Behaviors
+    .receiveMessagePartial {
+      case Discovered(urls) =>
+        scanNext(Scope.frontier(seed, urls, maxPages), Vector.empty)
+      case DiscoverFailed(reason) =>
+        // Fall back to scanning just the seed rather than aborting.
+        ctx.log
+          .warn("Discovery failed for {}: {}; scanning seed only", seed, reason)
+        scanNext(Scope.frontier(seed, Seq.empty, maxPages), Vector.empty)
+    }
 
   private def scanNext(
       remaining: Seq[String],
       acc: Vector[(String, Vector[Finding])],
-  ): Behavior[Command] =
-    remaining match
-      case Seq() => finish(acc)
-      case url +: rest =>
-        ctx.pipeToSelf(effects.scanOne(url)) {
-          case Success(fs) => Scanned(url, fs)
-          case Failure(_)  => Scanned(url, Vector.empty) // fail soft
-        }
-        awaitingScan(rest, acc)
+  ): Behavior[Command] = remaining match
+    case Seq() => finish(acc)
+    case url +: rest =>
+      ctx.pipeToSelf(effects.scanOne(url)) {
+        case Success(fs) => Scanned(url, fs)
+        case Failure(_) => Scanned(url, Vector.empty) // fail soft
+      }
+      awaitingScan(rest, acc)
 
   private def awaitingScan(
       remaining: Seq[String],
       acc: Vector[(String, Vector[Finding])],
-  ): Behavior[Command] = Behaviors.receiveMessagePartial { case Scanned(url, findings) =>
-    scanNext(remaining, acc :+ (url -> findings))
-  }
+  ): Behavior[Command] = Behaviors
+    .receiveMessagePartial { case Scanned(url, findings) =>
+      scanNext(remaining, acc :+ (url -> findings))
+    }
 
-  private def finish(results: Vector[(String, Vector[Finding])]): Behavior[Command] =
+  private def finish(
+      results: Vector[(String, Vector[Finding])],
+  ): Behavior[Command] =
     val total = results.map(_._2.size).sum
-    ctx.log.info("Site scan complete for {}: {} url(s), {} finding(s)", seed, results.size, total)
+    ctx.log.info(
+      "Site scan complete for {}: {} url(s), {} finding(s)",
+      seed,
+      results.size,
+      total,
+    )
     replyTo ! SiteScanComplete(seed, results)
     Behaviors.stopped

@@ -48,7 +48,8 @@ class ScopeSpec extends AnyWordSpec with Matchers {
     }
 
     "be empty when the seed has no host" in {
-      Scope.frontier("not a url", Seq("https://example.com/a"), 10) shouldBe empty
+      Scope.frontier("not a url", Seq("https://example.com/a"), 10) shouldBe
+        empty
     }
   }
 }

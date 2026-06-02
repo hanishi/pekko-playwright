@@ -16,8 +16,13 @@ class SiteScanOrchestratorSpec
 
   private val seed = "https://example.com"
 
-  private def findingFor(url: String): Finding =
-    Finding(FindingKind.Xss, Severity.Low, s"f:$url", reproducible = true, s"r:$url")
+  private def findingFor(url: String): Finding = Finding(
+    FindingKind.Xss,
+    Severity.Low,
+    s"f:$url",
+    reproducible = true,
+    s"r:$url",
+  )
 
   private def effects(
       discover: String => Future[Seq[String]],
@@ -28,11 +33,12 @@ class SiteScanOrchestratorSpec
 
     "scan the seed plus each discovered in-scope URL, grouped" in {
       val orch = spawn(SiteScanOrchestrator(effects(
-        discover = _ => Future.successful(Seq(
-          "https://example.com/a",
-          "https://evil.test/x", // off-host, dropped by Scope
-          "https://example.com/b",
-        )),
+        discover = _ =>
+          Future.successful(Seq(
+            "https://example.com/a",
+            "https://evil.test/x", // off-host, dropped by Scope
+            "https://example.com/b",
+          )),
         scanOne = url => Future.successful(Vector(findingFor(url))),
       )))
       val reply = createTestProbe[SiteScanComplete]()
@@ -49,7 +55,8 @@ class SiteScanOrchestratorSpec
 
     "fail soft: a failed scanOne yields an empty result, not an abort" in {
       val orch = spawn(SiteScanOrchestrator(effects(
-        discover = _ => Future.successful(Seq("https://example.com/a", "https://example.com/b")),
+        discover = _ =>
+          Future.successful(Seq("https://example.com/a", "https://example.com/b")),
         scanOne = url =>
           if url.endsWith("/b") then Future.failed(new RuntimeException("boom"))
           else Future.successful(Vector(findingFor(url))),
@@ -58,7 +65,8 @@ class SiteScanOrchestratorSpec
 
       orch ! Start(seed, reply.ref)
       val byUrl = reply.expectMessageType[SiteScanComplete].results.toMap
-      byUrl("https://example.com/a") shouldBe Vector(findingFor("https://example.com/a"))
+      byUrl("https://example.com/a") shouldBe
+        Vector(findingFor("https://example.com/a"))
       byUrl("https://example.com/b") shouldBe empty
     }
 
@@ -77,9 +85,8 @@ class SiteScanOrchestratorSpec
     "respect the maxPages cap" in {
       val orch = spawn(SiteScanOrchestrator(
         effects(
-          discover = _ => Future.successful(
-            (1 to 50).map(i => s"https://example.com/p$i"),
-          ),
+          discover =
+            _ => Future.successful((1 to 50).map(i => s"https://example.com/p$i")),
           scanOne = url => Future.successful(Vector(findingFor(url))),
         ),
         maxPages = 3,

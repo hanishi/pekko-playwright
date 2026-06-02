@@ -10,6 +10,7 @@ import org.apache.pekko.http.scaladsl.model.*
 import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshal
 import org.slf4j.LoggerFactory
 
+import dast.DastConfig
 import dast.DecisionParser
 import dast.LlmDecision
 
@@ -34,8 +35,11 @@ object ClaudeAnalyzer:
   val AnthropicVersion = "2023-06-01"
   val MaxTokens = 1024
 
-  /** Default per the claude-api skill; override with ANTHROPIC_MODEL. */
-  def model: String = sys.env.getOrElse("ANTHROPIC_MODEL", "claude-opus-4-8")
+  /** Default per the claude-api skill; override with ANTHROPIC_MODEL (env or
+    * .env.local).
+    */
+  def model: String = DastConfig.get("ANTHROPIC_MODEL")
+    .getOrElse("claude-opus-4-8")
 
   private val SystemPrompt = "You are the decision step of a consented DAST (dynamic application security " +
     "testing) scanner. Given the observed state of a page, select exactly one " +
@@ -91,9 +95,9 @@ object ClaudeAnalyzer:
   def analyze(
       context: AnalyzerContext,
   )(using system: ActorSystem[?], ec: ExecutionContext): Future[LlmDecision] =
-    sys.env.get("ANTHROPIC_API_KEY").filter(_.nonEmpty) match
+    DastConfig.get("ANTHROPIC_API_KEY") match
       case None =>
-        log.warn("ANTHROPIC_API_KEY not set; analyzer failing closed to Done")
+        log.warn("ANTHROPIC_API_KEY not set (env or .env.local); analyzer failing closed to Done")
         Future.successful(LlmDecision.Done)
       case Some(apiKey) =>
         val request = HttpRequest(

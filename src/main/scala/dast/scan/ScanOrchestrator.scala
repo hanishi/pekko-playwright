@@ -132,7 +132,11 @@ private class ScanOrchestrator(
               case Failure(_) => SinkScanReady(snapshot, Set.empty)
             }
             awaitingSinkScan(tier1)
-          case GateDecision.Deny(_) => step(snapshot, tier1, maxSteps)
+          case GateDecision.Deny(_) =>
+            // Observe-only: capture + Tier 1 only. No sink-scan, and no analyzer
+            // call (the model is active-path machinery), so it stays free and
+            // fully deterministic.
+            finish(tier1)
       case CaptureFailed(reason) =>
         ctx.log.warn("Capture failed for {}: {}", target, reason)
         finish(Vector.empty)
