@@ -22,13 +22,14 @@ object InjectionPoint:
     def describe: String = s"query param '$name'"
 
     def placeInto(baseUrl: String, value: String): String =
-      val uri     = new java.net.URI(baseUrl)
+      val uri = new java.net.URI(baseUrl)
       val nameEnc = enc(name)
-      val valEnc  = enc(value)
+      val valEnc = enc(value)
       val kept = Option(uri.getRawQuery)
-        .map(_.split("&").toIndexedSeq.filter(_.nonEmpty))
-        .getOrElse(Seq.empty)
-        .filterNot(p => p.split("=", 2)(0) == nameEnc || p.split("=", 2)(0) == name)
+        .map(_.split("&").toIndexedSeq.filter(_.nonEmpty)).getOrElse(Seq.empty)
+        .filterNot(p =>
+          p.split("=", 2)(0) == nameEnc || p.split("=", 2)(0) == name,
+        )
       val query = (kept :+ s"$nameEnc=$valEnc").mkString("&")
 
       val sb = new StringBuilder
@@ -39,4 +40,5 @@ object InjectionPoint:
       Option(uri.getRawFragment).foreach(f => sb.append("#").append(f))
       sb.toString
 
-  private def enc(s: String): String = URLEncoder.encode(s, StandardCharsets.UTF_8)
+  private def enc(s: String): String = URLEncoder
+    .encode(s, StandardCharsets.UTF_8)

@@ -8,13 +8,16 @@ import dast.InjectionPoint.QueryParam
 class ProbeOpSpec extends AnyWordSpec with Matchers {
 
   private val authed = Authorization.active("example.com")
-  private val point  = QueryParam("q")
+  private val point = QueryParam("q")
 
   "ProbeOp.precheck" should {
 
     "deny under the observe-only default (no browser touched)" in {
-      ProbeOp.precheck(Authorization.ObserveOnly, "https://example.com", "img-onerror") shouldBe
-        Left("active testing is disabled (observe-only)")
+      ProbeOp.precheck(
+        Authorization.ObserveOnly,
+        "https://example.com",
+        "img-onerror",
+      ) shouldBe Left("active testing is disabled (observe-only)")
     }
 
     "deny an off-scope host" in {
@@ -48,7 +51,8 @@ class ProbeOpSpec extends AnyWordSpec with Matchers {
   "ProbeOp.toFinding" should {
 
     "emit a High reproducible XSS finding when the marker fired" in {
-      val f = ProbeOp.toFinding("img-onerror", point, "dastABC", Set("dastABC")).get
+      val f = ProbeOp.toFinding("img-onerror", point, "dastABC", Set("dastABC"))
+        .get
       f.kind shouldBe FindingKind.Xss
       f.severity shouldBe Severity.High
       f.reproducible shouldBe true
@@ -56,8 +60,11 @@ class ProbeOpSpec extends AnyWordSpec with Matchers {
     }
 
     "emit nothing when the marker did not fire" in {
-      ProbeOp.toFinding("img-onerror", point, "dastABC", Set("dastOTHER")) shouldBe None
-      ProbeOp.toFinding("img-onerror", point, "dastABC", Set.empty) shouldBe None
+      ProbeOp
+        .toFinding("img-onerror", point, "dastABC", Set("dastOTHER")) shouldBe
+        None
+      ProbeOp.toFinding("img-onerror", point, "dastABC", Set.empty) shouldBe
+        None
     }
   }
 }

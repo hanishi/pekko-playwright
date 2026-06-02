@@ -23,13 +23,14 @@ import crawler.BrowserResource
 object ProbeOp:
 
   /** Installed on the page before navigation. Payload templates call
-    * `window.__dastConfirm(marker)`; executed payloads push their marker here. */
-  val ConfirmHookJs: String =
-    "window.__dastFired=[];" +
-      "window.__dastConfirm=function(m){window.__dastFired.push(String(m))};"
+    * `window.__dastConfirm(marker)`; executed payloads push their marker here.
+    */
+  val ConfirmHookJs: String = "window.__dastFired=[];" +
+    "window.__dastConfirm=function(m){window.__dastFired.push(String(m))};"
 
   /** Authorize and validate before any browser work. `Left` means do not
-    * proceed (denied by the gate, or unknown payload id). */
+    * proceed (denied by the gate, or unknown payload id).
+    */
   def precheck(
       auth: Authorization,
       baseUrl: String,
@@ -37,39 +38,38 @@ object ProbeOp:
   ): Either[String, Payload] =
     ConsentGate.decide(auth, ActionClass.Active, baseUrl) match
       case GateDecision.Deny(reason) => Left(reason)
-      case GateDecision.Permit =>
-        PayloadLibrary.get(payloadId).toRight(s"unknown payloadId '$payloadId'")
+      case GateDecision.Permit => PayloadLibrary.get(payloadId)
+          .toRight(s"unknown payloadId '$payloadId'")
 
   /** Parse the `__dastFired` readback into a set of fired markers. Tolerates a
-    * null or non-list value (returns empty). */
-  def firedMarkers(raw: Any): Set[String] =
-    raw match
-      case l: java.util.List[?] =>
-        l.asScala.iterator.collect { case m if m != null => m.toString }.toSet
-      case _ => Set.empty
+    * null or non-list value (returns empty).
+    */
+  def firedMarkers(raw: Any): Set[String] = raw match
+    case l: java.util.List[?] => l.asScala.iterator
+        .collect { case m if m != null => m.toString }.toSet
+    case _ => Set.empty
 
-  /** A confirmed XSS finding iff this probe's marker fired. Reproducible, with a
-    * model-free replay handle (payload id + injection point). */
+  /** A confirmed XSS finding iff this probe's marker fired. Reproducible, with
+    * a model-free replay handle (payload id + injection point).
+    */
   def toFinding(
       payloadId: String,
       point: InjectionPoint,
       marker: String,
       fired: Set[String],
-  ): Option[Finding] =
-    Option.when(fired.contains(marker))(
-      Finding(
-        kind = FindingKind.Xss,
-        severity = Severity.High,
-        evidence = s"payload '$payloadId' executed at ${point.describe}",
-        reproducible = true,
-        replay = s"probe ${point.describe} payload=$payloadId",
-      ),
-    )
+  ): Option[Finding] = Option.when(fired.contains(marker))(Finding(
+    kind = FindingKind.Xss,
+    severity = Severity.High,
+    evidence = s"payload '$payloadId' executed at ${point.describe}",
+    reproducible = true,
+    replay = s"probe ${point.describe} payload=$payloadId",
+  ))
 
   /** Browser-side probe on the pinned thread. Composes [[precheck]] (fail
     * closed) with injection + confirmation. Not unit tested (needs a live
     * page). `Left` is a refusal reason; `Right(None)` means injected but not
-    * confirmed. */
+    * confirmed.
+    */
   def probe(
       resource: BrowserResource,
       auth: Authorization,
@@ -77,15 +77,15 @@ object ProbeOp:
       point: InjectionPoint,
       payloadId: String,
       marker: String,
-  ): Either[String, Option[Finding]] =
-    precheck(auth, baseUrl, payloadId).map { payload =>
+  ): Either[String, Option[Finding]] = precheck(auth, baseUrl, payloadId)
+    .map { payload =>
       val url = point.placeInto(baseUrl, payload.render(marker))
       val fired = resource.withFreshPage { page =>
         page.addInitScript(ConfirmHookJs)
         page.navigate(
           url,
-          new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED)
-            .setTimeout(15000),
+          new Page.NavigateOptions()
+            .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(15000),
         )
         page.waitForLoadState(LoadState.DOMCONTENTLOADED)
         firedMarkers(page.evaluate("() => window.__dastFired || []"))
