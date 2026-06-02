@@ -22,7 +22,8 @@ class CaptureOpSpec extends AnyWordSpec with Matchers {
     }
 
     "default missing sections to empty maps" in {
-      CaptureOp.parseStorage(new java.util.LinkedHashMap[String, Object]()) shouldBe
+      CaptureOp
+        .parseStorage(new java.util.LinkedHashMap[String, Object]()) shouldBe
         (Map.empty, Map.empty)
     }
 

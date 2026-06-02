@@ -13,7 +13,7 @@ import crawler.BrowserResource
   * authorization.
   *
   * Run it on the pinned thread:
-  * {{{ pool.submit(r => CaptureOp.capture(r, url)) }}}
+  * {{{pool.submit(r => CaptureOp.capture(r, url))}}}
   *
   * The JS-result-to-Scala conversion ([[parseStorage]]) is pure and unit
   * tested; the browser-driving [[capture]] is exercised only against a live
@@ -23,7 +23,8 @@ object CaptureOp:
 
   /** Reads both web-storage areas into plain string maps. A pre-written
     * template (CLAUDE.md section 3), no dynamic parameters, nothing the model
-    * supplied. */
+    * supplied.
+    */
   val CaptureJs: String =
     """() => ({
       |  localStorage: Object.fromEntries(Object.entries(window.localStorage)),
@@ -33,41 +34,45 @@ object CaptureOp:
   /** Pure: turn the `CaptureJs` evaluate result into (localStorage,
     * sessionStorage) string maps. Missing or wrong-typed sections become empty
     * maps rather than throwing, so a hostile or unusual page cannot break
-    * capture. */
+    * capture.
+    */
   def parseStorage(raw: Any): (Map[String, String], Map[String, String]) =
     val top = asAnyMap(raw)
     (asStringMap(top.get("localStorage")), asStringMap(top.get("sessionStorage")))
 
   /** Browser-side capture on the pinned thread. Not unit tested (needs a live
-    * page); the parsing it delegates to is. */
+    * page); the parsing it delegates to is.
+    */
   def capture(resource: BrowserResource, url: String): ClientStateSnapshot =
     resource.withPage(url) { page =>
       val (local, session) = parseStorage(page.evaluate(CaptureJs))
-      val cookies          = page.context().cookies().asScala.map(toCookie).toSeq
-      ClientStateSnapshot(url = url, localStorage = local, sessionStorage = session, cookies = cookies)
+      val cookies = page.context().cookies().asScala.map(toCookie).toSeq
+      ClientStateSnapshot(
+        url = url,
+        localStorage = local,
+        sessionStorage = session,
+        cookies = cookies,
+      )
     }
 
-  private def asAnyMap(raw: Any): Map[String, Any] =
-    raw match
-      case m: java.util.Map[?, ?] =>
-        m.asScala.iterator.map((k, v) => k.toString -> (v: Any)).toMap
-      case _ => Map.empty
+  private def asAnyMap(raw: Any): Map[String, Any] = raw match
+    case m: java.util.Map[?, ?] => m.asScala.iterator
+        .map((k, v) => k.toString -> (v: Any)).toMap
+    case _ => Map.empty
 
   private def asStringMap(section: Option[Any]): Map[String, String] =
     section match
-      case Some(m: java.util.Map[?, ?]) =>
-        m.asScala.iterator.collect {
+      case Some(m: java.util.Map[?, ?]) => m.asScala.iterator.collect {
           case (k, v) if k != null && v != null => k.toString -> v.toString
         }.toMap
       case _ => Map.empty
 
-  private def toCookie(c: PwCookie): Cookie =
-    Cookie(
-      name = c.name,
-      value = c.value,
-      domain = Option(c.domain).getOrElse(""),
-      path = Option(c.path).getOrElse("/"),
-      httpOnly = Option(c.httpOnly).exists(_.booleanValue()),
-      secure = Option(c.secure).exists(_.booleanValue()),
-      sameSite = Option(c.sameSite).map(_.name),
-    )
+  private def toCookie(c: PwCookie): Cookie = Cookie(
+    name = c.name,
+    value = c.value,
+    domain = Option(c.domain).getOrElse(""),
+    path = Option(c.path).getOrElse("/"),
+    httpOnly = Option(c.httpOnly).exists(_.booleanValue()),
+    secure = Option(c.secure).exists(_.booleanValue()),
+    sameSite = Option(c.sameSite).map(_.name),
+  )
