@@ -23,6 +23,7 @@ libraryDependencies ++= Seq(
   "org.apache.pekko" %% "pekko-http" % pekkoHttpVersion,
   "org.apache.pekko" %% "pekko-stream-typed" % pekkoVersion,
   "ch.qos.logback" % "logback-classic" % logbackVersion,
+  "com.lihaoyi" %% "ujson" % "4.1.0",
   "com.microsoft.playwright" % "playwright" % "1.53.0",
   "org.scalatest" %% "scalatest" % "3.2.19" % Test,
   "org.apache.pekko" %% "pekko-actor-testkit-typed" % pekkoVersion % Test,
