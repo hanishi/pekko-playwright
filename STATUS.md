@@ -24,14 +24,18 @@ structured, reproducible findings.
 | SSRF | `Ssrf` | active, gated | out-of-band callback to a listener we control | no (HTTP) | no |
 | Reflected XSS | `Xss` | active, gated | payload **executes** in the browser (marker fires) | yes | yes (directs) |
 | DOM XSS (sink reach) | `Xss` | active, gated | injected marker reaches a dangerous DOM sink | yes | no |
+| Access control / IDOR | `BrokenAccessControl` | active, gated, **assisted** | request as a given identity returns restricted data (2xx + operator discriminator) | no (HTTP) | no |
 
 ## What is validated, and how
 
 - **Live, against a consenting/local target:** insecure cookies (assured.jp,
-  jp.stanby.com), reflected XSS, open redirect, SQLi (error-based), and SSRF
-  (out-of-band) — all confirmed end to end against `scripts/vuln-target.py`,
-  which intentionally exposes `/?q=` (XSS), `/redirect?next=` (open redirect),
-  `/item?id=` (SQLi), and `/fetch?url=` (SSRF).
+  jp.stanby.com), reflected XSS, open redirect, SQLi (error-based), SSRF
+  (out-of-band), and access control / IDOR — all confirmed end to end against
+  `scripts/vuln-target.py`, which intentionally exposes `/?q=` (XSS),
+  `/redirect?next=` (open redirect), `/item?id=` (SQLi), `/fetch?url=` (SSRF),
+  `/account?id=` (IDOR: session required, ownership not checked), and `/admin`
+  (missing auth). Access-control cases are described in an operator spec
+  (`scripts/access-spec.example.json`) and run via `dast.scan.AccessScannerMain`.
 - **Unit tested (pure logic):** every check's decision logic — header rules,
   redirect/SQLi/SSRF confirm predicates, payload shapes, the analyzer decision
   parser, scope/frontier, the orchestrator loop (stubbed effects). ~136 tests.
@@ -66,18 +70,21 @@ All read from the environment or `.env.local` (no shell export needed), via
 - `ANTHROPIC_MODEL` (default `claude-opus-4-8`)
 - `DAST_AUTHORIZED_HOSTS` (comma-separated; enables active probing)
 - `DAST_OAST_BASE_URL` (enables SSRF; must be reachable by the target)
+- `DAST_ACCESS_SPEC` (path to an access-control / IDOR spec, or pass as an arg)
 - `DAST_NAV_TIMEOUT_MS`, `DAST_MAX_PAGES`, `DAST_MAX_DEPTH` (tuning)
 
-Run: `sbt 'runMain dast.scan.ScannerMain <url>'` (single) or
-`dast.scan.SiteScannerMain <seed>` (crawl + scan each).
+Run: `sbt 'runMain dast.scan.ScannerMain <url>'` (single URL),
+`dast.scan.SiteScannerMain <seed>` (crawl + scan each), or
+`dast.scan.AccessScannerMain <spec.json>` (assisted access-control / IDOR).
+
+Access control is the one **assisted** check: it is operator-driven, not
+"point at a URL and go". You describe identities (captured sessions) and
+assertion cases (URL + identity + a discriminator) in a JSON spec; the tool
+automates the swap-and-diff matrix and confirms by the oracle. Real specs hold
+captured sessions, so keep them in a gitignored `*.local.json`.
 
 ## Out of scope (named, not hidden)
 
-- **IDOR / broken access control / auth** — needs real credentials (two
-  sessions) and per-app knowledge of protected endpoints and object IDs; §5
-  forbids auto-login. The honest form is an *assisted* tool (operator supplies
-  tokens + a URL template, it diffs responses), not a scanner-automatic check.
-  Not built.
 - **Stored XSS** — confirmation requires persisting via a form/state change,
   which §5 forbids.
 - **Injection surfaces** are GET-only: query params, URL fragment, path
