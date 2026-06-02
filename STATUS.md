@@ -24,7 +24,8 @@ structured, reproducible findings.
 | SSRF | `Ssrf` | active, gated | out-of-band callback to a listener we control | no (HTTP) | no |
 | Reflected XSS | `Xss` | active, gated | payload **executes** in the browser (marker fires) | yes | yes (directs) |
 | DOM XSS (sink reach) | `Xss` | active, gated | injected marker reaches a dangerous DOM sink | yes | no |
-| Access control / IDOR | `BrokenAccessControl` | active, gated, **assisted** | request as a given identity returns restricted data (2xx + operator discriminator) | no (HTTP) | no |
+| Access control / IDOR (spec) | `BrokenAccessControl` | active, gated, **assisted** | request as a given identity returns restricted data (2xx + operator discriminator) | no (HTTP) | no |
+| IDOR (LLM-planned) | `BrokenAccessControl` | active, gated | model proposes param / neighbour values / per-user field from an observed authenticated page; confirmed when a neighbour returns a 2xx whose field differs from the caller's own | login only | **yes (plans)** |
 
 ## What is validated, and how
 
@@ -101,12 +102,19 @@ gitignored `*.local.json`.
 
 ## Honest architecture notes
 
-- The **browser earns its place only for execution-confirmed XSS** and DOM
-  sink-reach. Cookies/headers are read off a normal visit; redirect/SQLi/SSRF
-  are pure HTTP and run off the browser pool entirely.
-- The **LLM is the least load-bearing part.** It directs reflected-XSS probes,
-  but every deterministic finding (and SSRF) is model-free. On the two real
-  targets exercised, the model contributed nothing to the findings.
+- The **browser earns its place only for execution-confirmed XSS**, DOM
+  sink-reach, and authenticated login. Cookies/headers are read off a normal
+  visit; redirect/SQLi/SSRF are pure HTTP and run off the browser pool entirely.
+- **Where the LLM earns its place: LLM-planned IDOR** (`IdorScannerMain`). The
+  model is the navigator -- from an observed authenticated page it proposes
+  which parameter to tamper, neighbour values, and the per-user discriminator
+  field; deterministic code confirms by cross-value comparison. The finding
+  cannot exist without the model's judgment, yet the model cannot fabricate one
+  (a secured endpoint yields no diff). This is the one place the model is
+  load-bearing rather than garnish.
+- Elsewhere the **LLM is still the least load-bearing part.** It directs
+  reflected-XSS probes, but every other deterministic finding (and SSRF) is
+  model-free.
 - **Pekko is heavier than the current scope needs** (scan a handful of URLs).
   It buys clean concurrency and the pinned-thread invariant, but a simpler
   runtime would also serve.

@@ -20,6 +20,7 @@ import crawler.pool.ResourcePool.Pool
 import crawler.pool.ResourcePool.asPool
 import crawler.pool.ResourcePool.submit
 import dast.AccessControlCheck.AccessSpec
+import dast.AccessControlCheck.Identity
 import dast.AccessControlProbe
 import dast.ActionClass
 import dast.Authorization
@@ -28,6 +29,7 @@ import dast.ConsentGate
 import dast.DastConfig
 import dast.Finding
 import dast.GateDecision
+import dast.IdorProbe
 import dast.LoginOp
 import dast.Oast
 import dast.OastListener
@@ -37,6 +39,7 @@ import dast.SinkScanOp
 import dast.SqlInjectionProbe
 import dast.SsrfProbe
 import dast.analyzer.ClaudeAnalyzer
+import dast.analyzer.IdorPlanner
 
 /** Assembles the real, pool- and Claude-backed effects and spawns an
   * orchestrator. This is wiring, not logic: it runs only against a live target
@@ -116,6 +119,45 @@ object Scanner:
       if !needsLogin then Future.successful(spec)
       else resolveLogins(buildPool(ctx, 1, navTimeoutMs), spec, auth)
     resolved.flatMap(s => AccessControlProbe.scan(s, auth))
+
+  /** Run an LLM-planned IDOR scan of one authenticated URL: resolve the
+    * identity's session (logging in if configured), observe the page, let the
+    * planner propose tests, and confirm each deterministically.
+    */
+  def runIdor(
+      ctx: ActorContext[?],
+      url: String,
+      identity: Identity,
+      auth: Authorization,
+      navTimeoutMs: Int = 30000,
+  )(using ActorSystem[?], ExecutionContext): Future[Vector[Finding]] =
+    resolveCookie(ctx, identity, auth, navTimeoutMs).flatMap { cookie =>
+      IdorProbe.scan(url, cookie, auth, obs => IdorPlanner.plan(obs))
+    }
+
+  /** A single identity's session cookie: minted by login if configured (gated,
+    * on the pool), else the static cookie. Login failure falls back to static.
+    */
+  private def resolveCookie(
+      ctx: ActorContext[?],
+      identity: Identity,
+      auth: Authorization,
+      navTimeoutMs: Int,
+  )(using ActorSystem[?], ExecutionContext): Future[Option[String]] =
+    identity.login match
+      case None => Future.successful(identity.cookie)
+      case Some(login) =>
+        ConsentGate.decide(auth, ActionClass.Active, login.loginUrl) match
+          case GateDecision.Deny(reason) =>
+            ctx_log_skip("login", reason)
+            Future.successful(identity.cookie)
+          case GateDecision.Permit => buildPool(ctx, 1, navTimeoutMs)
+              .submit(r =>
+                LoginOp.login(r, login.loginUrl, login.username, login.password),
+              ).map {
+                case Right(c) => Some(c)
+                case Left(_) => identity.cookie
+              }
 
   /** Replace each login-configured identity's cookie with one minted by
     * actually logging in (on the pinned thread, gated by host). A failed or

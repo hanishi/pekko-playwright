@@ -17,8 +17,8 @@ import crawler.BrowserResource
   * consulted. Returns the resulting cookies as a `Cookie` header value.
   *
   * Browser work, so it runs on the pinned thread via `pool.submit`. Not unit
-  * tested (needs a live login page); exercised live. `Left` is a reason it could
-  * not log in; `Right` is the captured cookie header.
+  * tested (needs a live login page); exercised live. `Left` is a reason it
+  * could not log in; `Right` is the captured cookie header.
   */
 object LoginOp:
 
@@ -53,11 +53,10 @@ object LoginOp:
   /** First plausible username input: an email/text field, else a conventionally
     * named one, else any visible non-password/hidden/control input.
     */
-  private def usernameField(page: Page) =
-    Option(page.querySelector("input[type=email]"))
-      .orElse(Option(page.querySelector("input[type=text]")))
-      .orElse(Option(page.querySelector(
-        "input[name='username'], input[name='user'], input[name='email'], input[name='login']",
-      ))).orElse(Option(page.querySelector(
-        "input:not([type='password']):not([type='hidden']):not([type='submit']):not([type='checkbox']):not([type='radio'])",
-      )))
+  private def usernameField(page: Page) = Option(
+    page.querySelector("input[type=email]"),
+  ).orElse(Option(page.querySelector("input[type=text]"))).orElse(Option(
+    page.querySelector("input[name='username'], input[name='user'], input[name='email'], input[name='login']"),
+  )).orElse(Option(
+    page.querySelector("input:not([type='password']):not([type='hidden']):not([type='submit']):not([type='checkbox']):not([type='radio'])"),
+  ))
