@@ -24,6 +24,7 @@ import dast.CaptureOp
 import dast.OpenRedirectProbe
 import dast.ProbeOp
 import dast.SinkScanOp
+import dast.SqlInjectionProbe
 import dast.analyzer.ClaudeAnalyzer
 
 /** Assembles the real, pool- and Claude-backed effects and spawns an
@@ -126,8 +127,9 @@ object Scanner:
         pool
           .submit(r => SinkScanOp.scan(r, baseUrl, source, marker, navTimeoutMs)),
       // HTTP-level, off the browser pool entirely (CLAUDE.md: the browser is
-      // only for execution-confirmed XSS; redirects are an HTTP concern).
+      // only for execution-confirmed XSS; redirects/SQLi are HTTP concerns).
       redirectScan = baseUrl => OpenRedirectProbe.scan(baseUrl),
+      sqlScan = baseUrl => SqlInjectionProbe.scan(baseUrl),
     )
 
   /** Read-only, same-host BFS over the pool collecting anchor hrefs to

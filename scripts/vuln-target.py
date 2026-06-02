@@ -13,6 +13,8 @@ Then point the scanner at it (localhost is the authorized active scope):
     DAST_AUTHORIZED_HOSTS=localhost \\
       sbt 'runMain dast.scan.ScannerMain http://localhost:8123/?q=hello'
 """
+import re
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -32,6 +34,33 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Location", target)
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+
+        # SQL injection, on purpose: `id` is concatenated into a fake query.
+        # An unbalanced quote yields a (faked) MySQL error; a SLEEP(n) payload
+        # actually sleeps n seconds, so both error- and time-based probes confirm.
+        if parsed.path == "/item":
+            ident = params.get("id", [""])[0]
+            m = re.search(r"SLEEP\((\d+)\)", ident, re.IGNORECASE)
+            if m:
+                time.sleep(min(int(m.group(1)), 10))
+            if ident.count("'") % 2 == 1:
+                body = (
+                    b"<html><body>Database error: You have an error in your SQL "
+                    b"syntax near \"'\"</body></html>"
+                )
+                self.send_response(500)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            body = f"<html><body>Item: {ident}</body></html>".encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         q = params.get("q", [""])[0]

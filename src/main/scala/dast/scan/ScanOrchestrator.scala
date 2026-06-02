@@ -59,8 +59,10 @@ object ScanOrchestrator:
       analyze: AnalyzerContext => Future[LlmDecision],
       probe: (String, InjectionPoint, String, String) => Future[Option[Finding]],
       sinkScan: (String, InjectionPoint, String) => Future[Set[String]],
-      // Deterministic HTTP open-redirect probe over the URL's query params.
+      // Deterministic HTTP probes over the URL's query params (browser-free).
       redirectScan: String => Future[Vector[Finding]] =
+        _ => Future.successful(Vector.empty),
+      sqlScan: String => Future[Vector[Finding]] =
         _ => Future.successful(Vector.empty),
   )
 
@@ -71,7 +73,7 @@ object ScanOrchestrator:
       snapshot: ClientStateSnapshot,
       sinks: Set[String],
   ) extends Command
-  private final case class RedirectScanReady(
+  private final case class HttpScanReady(
       snapshot: ClientStateSnapshot,
       findings: Vector[Finding],
   ) extends Command
@@ -161,21 +163,27 @@ private class ScanOrchestrator(
   private def awaitingSinkScan(tier1: Vector[Finding]): Behavior[Command] =
     Behaviors.receiveMessagePartial { case SinkScanReady(snapshot, sinks) =>
       val dom = SinkScanOp.toFindings(InjectionPoint.Fragment, sinks).toVector
-      // Deterministic open-redirect probe before the model loop.
-      ctx.pipeToSelf(effects.redirectScan(target)) {
-        case Success(fs) => RedirectScanReady(snapshot, tier1 ++ dom ++ fs)
-        case Failure(_) => RedirectScanReady(snapshot, tier1 ++ dom)
+      // Deterministic, browser-free HTTP probes run together before the model
+      // loop. Each fails soft to no findings.
+      val http = effects.redirectScan(target).zip(effects.sqlScan(target))
+        .map((r, s) => r ++ s)
+      ctx.pipeToSelf(http) {
+        case Success(fs) => HttpScanReady(snapshot, tier1 ++ dom ++ fs)
+        case Failure(_) => HttpScanReady(snapshot, tier1 ++ dom)
       }
-      awaitingRedirectScan
+      awaitingHttpScan
     }
 
-  private def awaitingRedirectScan: Behavior[Command] = Behaviors
-    .receiveMessagePartial { case RedirectScanReady(snapshot, findings) =>
-      if findings.exists(_.kind == FindingKind.OpenRedirect) then
+  private def awaitingHttpScan: Behavior[Command] = Behaviors
+    .receiveMessagePartial { case HttpScanReady(snapshot, findings) =>
+      val redirects = findings.count(_.kind == FindingKind.OpenRedirect)
+      val sqli = findings.count(_.kind == FindingKind.SqlInjection)
+      if redirects > 0 || sqli > 0 then
         ctx.log.info(
-          "Open-redirect probe found {} issue(s) on {}",
-          findings.count(_.kind == FindingKind.OpenRedirect),
+          "HTTP probes on {}: {} open-redirect, {} SQLi",
           target,
+          redirects,
+          sqli,
         )
       step(snapshot, findings, maxSteps, Set.empty)
     }

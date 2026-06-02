@@ -46,12 +46,15 @@ class ScanOrchestratorSpec
         (_, _, _) => Future.successful(Set.empty),
       redirectScan: String => Future[Vector[Finding]] =
         _ => Future.successful(Vector.empty),
+      sqlScan: String => Future[Vector[Finding]] =
+        _ => Future.successful(Vector.empty),
   ): Effects = Effects(
     capture = _ => Future.successful(snapshot),
     analyze = analyze,
     probe = probe,
     sinkScan = sinkScan,
     redirectScan = redirectScan,
+    sqlScan = sqlScan,
   )
 
   private type AnalyzerCtxF =
@@ -165,6 +168,29 @@ class ScanOrchestratorSpec
       orch ! Start(target, reply.ref)
       reply.expectMessageType[ScanComplete].findings shouldBe
         (tier1 :+ redirectFinding)
+    }
+
+    "merge SQL-injection findings under active auth" in {
+      val sqliFinding = Finding(
+        FindingKind.SqlInjection,
+        Severity.High,
+        "query param 'id' triggers a MySQL error",
+        reproducible = true,
+        "sqli query param 'id' technique=error",
+      )
+      val orch = spawn(ScanOrchestrator(
+        Authorization.active("example.com"),
+        effects(
+          analyze = _ => Future.successful(Done),
+          probe = (_, _, _, _) => Future.successful(None),
+          sqlScan = _ => Future.successful(Vector(sqliFinding)),
+        ),
+      ))
+      val reply = createTestProbe[ScanComplete]()
+
+      orch ! Start(target, reply.ref)
+      reply.expectMessageType[ScanComplete].findings shouldBe
+        (tier1 :+ sqliFinding)
     }
 
     "not run the open-redirect probe under observe-only auth" in {
