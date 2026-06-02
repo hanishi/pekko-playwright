@@ -48,6 +48,8 @@ class ScanOrchestratorSpec
         _ => Future.successful(Vector.empty),
       sqlScan: String => Future[Vector[Finding]] =
         _ => Future.successful(Vector.empty),
+      ssrfScan: String => Future[Vector[Finding]] =
+        _ => Future.successful(Vector.empty),
   ): Effects = Effects(
     capture = _ => Future.successful(snapshot),
     analyze = analyze,
@@ -55,6 +57,7 @@ class ScanOrchestratorSpec
     sinkScan = sinkScan,
     redirectScan = redirectScan,
     sqlScan = sqlScan,
+    ssrfScan = ssrfScan,
   )
 
   private type AnalyzerCtxF =
@@ -191,6 +194,29 @@ class ScanOrchestratorSpec
       orch ! Start(target, reply.ref)
       reply.expectMessageType[ScanComplete].findings shouldBe
         (tier1 :+ sqliFinding)
+    }
+
+    "merge SSRF findings under active auth" in {
+      val ssrfFinding = Finding(
+        FindingKind.Ssrf,
+        Severity.High,
+        "query param 'url' caused a server-side request",
+        reproducible = true,
+        "ssrf query param 'url' token=t1",
+      )
+      val orch = spawn(ScanOrchestrator(
+        Authorization.active("example.com"),
+        effects(
+          analyze = _ => Future.successful(Done),
+          probe = (_, _, _, _) => Future.successful(None),
+          ssrfScan = _ => Future.successful(Vector(ssrfFinding)),
+        ),
+      ))
+      val reply = createTestProbe[ScanComplete]()
+
+      orch ! Start(target, reply.ref)
+      reply.expectMessageType[ScanComplete].findings shouldBe
+        (tier1 :+ ssrfFinding)
     }
 
     "not run the open-redirect probe under observe-only auth" in {

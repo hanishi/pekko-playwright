@@ -21,10 +21,14 @@ import crawler.pool.ResourcePool.asPool
 import crawler.pool.ResourcePool.submit
 import dast.Authorization
 import dast.CaptureOp
+import dast.DastConfig
+import dast.Oast
+import dast.OastListener
 import dast.OpenRedirectProbe
 import dast.ProbeOp
 import dast.SinkScanOp
 import dast.SqlInjectionProbe
+import dast.SsrfProbe
 import dast.analyzer.ClaudeAnalyzer
 
 /** Assembles the real, pool- and Claude-backed effects and spawns an
@@ -51,8 +55,9 @@ object Scanner:
       ExecutionContext,
   ): ActorRef[ScanOrchestrator.Command] =
     val pool = buildPool(ctx, poolSize, navTimeoutMs)
+    val oast = buildOast()
     ctx.spawn(
-      ScanOrchestrator(auth, scanEffects(pool, auth, navTimeoutMs)),
+      ScanOrchestrator(auth, scanEffects(pool, auth, navTimeoutMs, oast)),
       "dast-scan-orchestrator",
     )
 
@@ -72,6 +77,7 @@ object Scanner:
       ec: ExecutionContext,
   ): ActorRef[SiteScanOrchestrator.Command] =
     val pool = buildPool(ctx, poolSize, navTimeoutMs)
+    val oast = buildOast()
     val counter = new AtomicInteger(0)
     given Timeout = Timeout(perScanTimeout)
 
@@ -79,7 +85,7 @@ object Scanner:
       discover = seed => discover(pool, seed, maxDepth, maxPages),
       scanOne = url =>
         val ref = system.systemActorOf(
-          ScanOrchestrator(auth, scanEffects(pool, auth, navTimeoutMs)),
+          ScanOrchestrator(auth, scanEffects(pool, auth, navTimeoutMs, oast)),
           s"dast-scan-${counter.incrementAndGet()}",
         )
         ref.ask[ScanOrchestrator.ScanComplete](ScanOrchestrator.Start(url, _))
@@ -115,6 +121,7 @@ object Scanner:
       pool: Pool[BrowserResource],
       auth: Authorization,
       navTimeoutMs: Int,
+      oast: Option[Oast],
   )(using ActorSystem[?], ExecutionContext): ScanOrchestrator.Effects =
     ScanOrchestrator.Effects(
       capture = url => pool.submit(r => CaptureOp.capture(r, url)),
@@ -130,7 +137,29 @@ object Scanner:
       // only for execution-confirmed XSS; redirects/SQLi are HTTP concerns).
       redirectScan = baseUrl => OpenRedirectProbe.scan(baseUrl),
       sqlScan = baseUrl => SqlInjectionProbe.scan(baseUrl),
+      // SSRF needs an out-of-band listener; skipped (and so never guessed) when
+      // DAST_OAST_BASE_URL is unset.
+      ssrfScan = oast match
+        case Some(o) => baseUrl => SsrfProbe.scan(baseUrl, o)
+        case None => _ => scala.concurrent.Future.successful(Vector.empty),
     )
+
+  /** Build and bind an OAST listener if DAST_OAST_BASE_URL is configured. The
+    * base URL must be reachable by the target (a tunnel / public address for a
+    * real target; loopback for local testing). Returns None when unset, which
+    * disables SSRF probing (no honest confirmation is possible without it).
+    */
+  private def buildOast()(using
+      system: ActorSystem[?],
+      ec: ExecutionContext,
+  ): Option[Oast] = DastConfig.get("DAST_OAST_BASE_URL").flatMap { base =>
+    val uri = new java.net.URI(base)
+    val host = Option(uri.getHost).getOrElse("127.0.0.1")
+    val port = if uri.getPort > 0 then uri.getPort else 80
+    val listener = new OastListener(host, port)
+    listener.start() // fire-and-forget; binds well before the first probe
+    Some(listener)
+  }
 
   /** Read-only, same-host BFS over the pool collecting anchor hrefs to
     * `maxDepth` / `maxPages`. Failures on a page yield no links (fail soft).

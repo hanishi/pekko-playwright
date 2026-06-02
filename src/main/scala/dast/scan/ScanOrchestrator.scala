@@ -64,6 +64,8 @@ object ScanOrchestrator:
         _ => Future.successful(Vector.empty),
       sqlScan: String => Future[Vector[Finding]] =
         _ => Future.successful(Vector.empty),
+      ssrfScan: String => Future[Vector[Finding]] =
+        _ => Future.successful(Vector.empty),
   )
 
   private final case class SnapshotReady(snapshot: ClientStateSnapshot)
@@ -165,8 +167,11 @@ private class ScanOrchestrator(
       val dom = SinkScanOp.toFindings(InjectionPoint.Fragment, sinks).toVector
       // Deterministic, browser-free HTTP probes run together before the model
       // loop. Each fails soft to no findings.
-      val http = effects.redirectScan(target).zip(effects.sqlScan(target))
-        .map((r, s) => r ++ s)
+      val http = Future.sequence(Seq(
+        effects.redirectScan(target),
+        effects.sqlScan(target),
+        effects.ssrfScan(target),
+      )).map(_.flatten.toVector)
       ctx.pipeToSelf(http) {
         case Success(fs) => HttpScanReady(snapshot, tier1 ++ dom ++ fs)
         case Failure(_) => HttpScanReady(snapshot, tier1 ++ dom)
@@ -178,12 +183,14 @@ private class ScanOrchestrator(
     .receiveMessagePartial { case HttpScanReady(snapshot, findings) =>
       val redirects = findings.count(_.kind == FindingKind.OpenRedirect)
       val sqli = findings.count(_.kind == FindingKind.SqlInjection)
-      if redirects > 0 || sqli > 0 then
+      val ssrf = findings.count(_.kind == FindingKind.Ssrf)
+      if redirects > 0 || sqli > 0 || ssrf > 0 then
         ctx.log.info(
-          "HTTP probes on {}: {} open-redirect, {} SQLi",
+          "HTTP probes on {}: {} open-redirect, {} SQLi, {} SSRF",
           target,
           redirects,
           sqli,
+          ssrf,
         )
       step(snapshot, findings, maxSteps, Set.empty)
     }

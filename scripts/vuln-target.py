@@ -15,6 +15,7 @@ Then point the scanner at it (localhost is the authorized active scope):
 """
 import re
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -34,6 +35,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Location", target)
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+
+        # SSRF, on purpose: the server fetches whatever `url` points at.
+        if parsed.path == "/fetch":
+            fetch_url = params.get("url", [""])[0]
+            note = "no url"
+            if fetch_url:
+                try:
+                    with urllib.request.urlopen(fetch_url, timeout=5) as r:
+                        note = f"fetched {r.status}"
+                except Exception as e:  # noqa: BLE001
+                    note = f"fetch failed: {e}"
+            body = f"<html><body>{note}</body></html>".encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         # SQL injection, on purpose: `id` is concatenated into a fake query.
