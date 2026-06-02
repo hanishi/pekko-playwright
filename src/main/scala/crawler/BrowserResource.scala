@@ -48,7 +48,7 @@ final class BrowserResource(
   )
   private val playwright: Playwright = Playwright.create()
   private val browser: Browser = playwright.chromium()
-    .launch(launchOptions(proxy))
+    .launch(launchOptions(proxy, settings.stealth))
   private val stealthScript: Path = resolveResource("/stealth.js", "stealth-")
   private val initScript: Path = resolveResource("/crawler.js", "crawler-init-")
 
@@ -162,16 +162,23 @@ final class BrowserResource(
   }
 
   private def newContext(): BrowserContext = {
-    val opts = new Browser.NewContextOptions().setUserAgent(
-      // Match a current real Chrome — bot managers flag stale majors.
+    // Match a current real Chrome for scraping (bot managers flag stale majors);
+    // the scanner overrides this with an identifiable UA.
+    val chromeUA =
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    ).setViewportSize(1280, 800).setLocale("en-US")
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    val opts = new Browser.NewContextOptions()
+      .setUserAgent(settings.userAgent.getOrElse(chromeUA))
+      .setViewportSize(1280, 800).setLocale("en-US")
       .setTimezoneId("America/New_York")
     val c = browser.newContext(opts)
-    // Stealth must run before crawler init: addInitScript fires in
-    // registration order on every navigation.
-    c.addInitScript(stealthScript)
+    if (settings.stealth)
+      // Stealth must run before crawler init: addInitScript fires in
+      // registration order on every navigation.
+      c.addInitScript(stealthScript)
+    else
+      // Be identifiable, not evasive (CLAUDE.md section 5).
+      c.setExtraHTTPHeaders(java.util.Map.of("X-Scanner", ScannerHeader))
     c.addInitScript(initScript)
     c
   }
@@ -209,7 +216,18 @@ object BrowserResource {
   final case class Settings(
       contextRotationEvery: Int = 5,
       navigationTimeoutMs: Int = 15000,
+      // Scraping default. For sanctioned scanning set stealth = false: the DAST
+      // path must be identifiable, not evasive (CLAUDE.md sections 2 and 5).
+      stealth: Boolean = true,
+      // Overrides the user agent when set (the scanner announces itself).
+      userAgent: Option[String] = None,
   )
+
+  /** Sent as the X-Scanner header on non-stealth (DAST) contexts so a
+    * consenting target can see who is testing it.
+    */
+  private val ScannerHeader =
+    "pekko-dast-scanner/0.1 (+authorized security testing)"
 
   /** Non-HTML response (PDF, image, etc.) — terminal, no retry. */
   private final class NonHtmlContentException(message: String)
@@ -222,13 +240,15 @@ object BrowserResource {
     */
   private def launchOptions(
       proxy: Option[ProxyProviderConf],
+      stealth: Boolean,
   ): BrowserType.LaunchOptions = {
     val args = {
       val core = new java.util.ArrayList[String](java.util.List.of(
-        "--disable-blink-features=AutomationControlled",
         "--disable-features=IsolateOrigins,site-per-process",
         "--headless=new",
       ))
+      // Evasion only on the scraping path; the scanner stays identifiable.
+      if (stealth) core.add("--disable-blink-features=AutomationControlled")
       if (sys.env.get("CHROMIUM_NO_SANDBOX").contains("true")) {
         core.add("--no-sandbox")
         core.add("--disable-dev-shm-usage")
@@ -236,6 +256,8 @@ object BrowserResource {
       core
     }
     val opts = new BrowserType.LaunchOptions().setHeadless(true).setArgs(args)
+    // Strip the CDP automation banner only when evading; the scanner leaves it.
+    if (stealth) opts
       .setIgnoreDefaultArgs(java.util.List.of("--enable-automation"))
     proxy.foreach { p =>
       opts.setProxy(

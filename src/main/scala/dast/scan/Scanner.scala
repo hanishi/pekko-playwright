@@ -44,10 +44,17 @@ object Scanner:
       ResourcePool[BrowserResource](
         size = poolSize,
         make = i =>
+          // DAST path is identifiable, not evasive: no stealth.js, no automation
+          // hiding, an announced UA + X-Scanner header (CLAUDE.md section 5).
           new BrowserResource(
             i,
             None,
-            BrowserResource.Settings(navigationTimeoutMs = navTimeoutMs),
+            BrowserResource.Settings(
+              navigationTimeoutMs = navTimeoutMs,
+              stealth = false,
+              userAgent =
+                Some("pekko-dast-scanner/0.1 (+authorized security testing)"),
+            ),
           ),
       ),
       "dast-browser-pool",
