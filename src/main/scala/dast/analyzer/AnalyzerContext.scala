@@ -16,14 +16,16 @@ final case class AnalyzerContext(
 ):
 
   /** The user-message text. Pure and deterministic (sorted) so the request is
-    * cache-friendly. */
+    * cache-friendly.
+    */
   def render: String =
     s"""Target page: $url
        |Storage keys present: ${storageKeys.sorted.mkString(", ")}
        |Candidate injection points: ${injectionPointIds.sorted.mkString(", ")}
        |Candidate links: ${linkIds.sorted.mkString(", ")}
        |
-       |Choose the single best next action by calling the `decide` tool.""".stripMargin
+       |Choose the single best next action by calling the `decide` tool."""
+      .stripMargin
 
 object AnalyzerContext:
 
@@ -32,10 +34,10 @@ object AnalyzerContext:
       snapshot: ClientStateSnapshot,
       injectionPointIds: Seq[String] = Seq.empty,
       linkIds: Seq[String] = Seq.empty,
-  ): AnalyzerContext =
-    AnalyzerContext(
-      url = snapshot.url,
-      storageKeys = (snapshot.localStorage.keys ++ snapshot.sessionStorage.keys).toSeq.sorted,
-      injectionPointIds = injectionPointIds,
-      linkIds = linkIds,
-    )
+  ): AnalyzerContext = AnalyzerContext(
+    url = snapshot.url,
+    storageKeys = (snapshot.localStorage.keys ++ snapshot.sessionStorage.keys)
+      .toSeq.sorted,
+    injectionPointIds = injectionPointIds,
+    linkIds = linkIds,
+  )

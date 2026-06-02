@@ -29,8 +29,9 @@ class ClaudeAnalyzerSpec extends AnyWordSpec with Matchers {
     }
 
     "constrain payloadId to the audited library" in {
-      val enumValues = body("tools")(0)("input_schema")("properties")("payloadId")("enum")
-        .arr.map(_.str).toSet
+      val enumValues =
+        body("tools")(0)("input_schema")("properties")("payloadId")("enum").arr
+          .map(_.str).toSet
       enumValues shouldBe PayloadLibrary.ids
     }
 
@@ -42,36 +43,33 @@ class ClaudeAnalyzerSpec extends AnyWordSpec with Matchers {
 
   "ClaudeAnalyzer.responseToDecision" should {
 
-    def toolUse(input: ujson.Value): ujson.Value =
-      ujson.Obj("type" -> "tool_use", "name" -> "decide", "input" -> input)
+    def toolUse(input: ujson.Value): ujson.Value = ujson
+      .Obj("type" -> "tool_use", "name" -> "decide", "input" -> input)
 
-    def response(blocks: ujson.Value*): ujson.Value =
-      ujson.Obj("content" -> ujson.Arr(blocks*))
+    def response(blocks: ujson.Value*): ujson.Value = ujson
+      .Obj("content" -> ujson.Arr(blocks*))
 
     "map a valid decide tool_use to the decision" in {
-      val body = response(
-        toolUse(ujson.Obj(
-          "kind"             -> "probe",
-          "injectionPointId" -> "q",
-          "payloadId"        -> "img-onerror",
-        )),
-      )
+      val body = response(toolUse(ujson.Obj(
+        "kind" -> "probe",
+        "injectionPointId" -> "q",
+        "payloadId" -> "img-onerror",
+      )))
       ClaudeAnalyzer.responseToDecision(body) shouldBe Probe("q", "img-onerror")
     }
 
     "fail closed to Done when there is no tool_use block" in {
-      val body = response(ujson.Obj("type" -> "text", "text" -> "here is my analysis"))
+      val body =
+        response(ujson.Obj("type" -> "text", "text" -> "here is my analysis"))
       ClaudeAnalyzer.responseToDecision(body) shouldBe Done
     }
 
     "fail closed to Done on an off-menu payloadId" in {
-      val body = response(
-        toolUse(ujson.Obj(
-          "kind"             -> "probe",
-          "injectionPointId" -> "q",
-          "payloadId"        -> "rm -rf",
-        )),
-      )
+      val body = response(toolUse(ujson.Obj(
+        "kind" -> "probe",
+        "injectionPointId" -> "q",
+        "payloadId" -> "rm -rf",
+      )))
       ClaudeAnalyzer.responseToDecision(body) shouldBe Done
     }
 
