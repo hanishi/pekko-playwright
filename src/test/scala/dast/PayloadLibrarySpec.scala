@@ -24,6 +24,29 @@ class PayloadLibrarySpec extends AnyWordSpec with Matchers {
       rendered should include("PVMARK123")
       (rendered should not).include(PayloadLibrary.MarkerPlaceholder)
     }
+
+    "cover multiple injection contexts and group ids by context" in {
+      (PayloadLibrary.idsFor(InjectionContext.HtmlAttr) should contain)
+        .allOf("attr-breakout", "attr-onfocus")
+      PayloadLibrary.idsFor(InjectionContext.UrlOrSrc) should
+        contain("url-javascript")
+      PayloadLibrary.idsFor(InjectionContext.JsString) should
+        contain("js-string-breakout")
+      // Every payload is tagged with the context idsFor reports it under.
+      PayloadLibrary.ids.foreach { id =>
+        val p = PayloadLibrary.get(id).get
+        PayloadLibrary.idsFor(p.context) should contain(id)
+      }
+    }
+
+    "render the new context payloads with the marker substituted" in
+      Seq("attr-breakout", "attr-onfocus", "url-javascript").foreach { id =>
+        val rendered = PayloadLibrary.get(id).get.render("PVMARK123")
+        withClue(s"$id: ") {
+          rendered should include("PVMARK123")
+          (rendered should not).include(PayloadLibrary.MarkerPlaceholder)
+        }
+      }
   }
 
   "escapeJsString" should {

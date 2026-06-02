@@ -1,16 +1,28 @@
 package dast
 
+/** Where a reflected value lands in the response, which decides what shape a
+  * payload must take to execute there.
+  */
+enum InjectionContext:
+  case HtmlBody, HtmlAttr, JsString, UrlOrSrc
+
 /** A single audited probe. The only dynamic part of a payload is the unique
   * `marker` substituted at render time; everything else is fixed text written
   * and reviewed here. The model never supplies template text, only the
-  * `payloadId` that selects one of these.
+  * `payloadId` that selects one of these. `context` records the reflection
+  * context the template is built for.
   *
   * Each template embeds the marker inside a call to a `confirm` hook
   * (`window.__dastConfirm`) that a later confirm op installs on the page. A
   * vulnerability is only reported when that hook fires with the marker, never
   * because a payload was injected.
   */
-final case class Payload(id: String, description: String, template: String):
+final case class Payload(
+    id: String,
+    context: InjectionContext,
+    description: String,
+    template: String,
+):
 
   /** Render this payload with a system-generated `marker`. The marker is
     * escaped into a JS string literal even though it is system data, not model
@@ -28,35 +40,66 @@ final case class Payload(id: String, description: String, template: String):
   */
 object PayloadLibrary:
 
+  import InjectionContext.*
+
   /** Placeholder replaced by the escaped marker in every template. */
   val MarkerPlaceholder = "__MARKER__"
+
+  private def confirm =
+    s"window.__dastConfirm&&window.__dastConfirm('$MarkerPlaceholder')"
 
   private val payloads: Map[String, Payload] = Seq(
     Payload(
       "img-onerror",
-      "Reflected/stored XSS via an <img> error handler.",
-      s"""<img src=x onerror="window.__dastConfirm&&window.__dastConfirm('$MarkerPlaceholder')">""",
+      HtmlBody,
+      "HTML-body XSS via an <img> error handler.",
+      s"""<img src=x onerror="$confirm">""",
     ),
     Payload(
       "svg-onload",
-      "Reflected/stored XSS via an <svg> load handler.",
-      s"""<svg onload="window.__dastConfirm&&window.__dastConfirm('$MarkerPlaceholder')">""",
+      HtmlBody,
+      "HTML-body XSS via an <svg> load handler.",
+      s"""<svg onload="$confirm">""",
     ),
     Payload(
       "script-tag",
-      "Reflected/stored XSS via an injected <script> element.",
-      s"""<script>window.__dastConfirm&&window.__dastConfirm('$MarkerPlaceholder')</script>""",
+      HtmlBody,
+      "HTML-body XSS via an injected <script> element.",
+      s"""<script>$confirm</script>""",
+    ),
+    Payload(
+      "attr-breakout",
+      HtmlAttr,
+      "Break out of a double-quoted attribute into a new <img> tag.",
+      s"""\"><img src=x onerror="$confirm">""",
+    ),
+    Payload(
+      "attr-onfocus",
+      HtmlAttr,
+      "Stay in the tag, add an autofocus onfocus handler.",
+      s"""\" autofocus onfocus="$confirm" x=\"""",
     ),
     Payload(
       "js-string-breakout",
-      "Breakout from a single-quoted JS string sink into a confirm call.",
-      s"""';window.__dastConfirm&&window.__dastConfirm('$MarkerPlaceholder');//""",
+      JsString,
+      "Break out of a single-quoted JS string sink into a confirm call.",
+      s"""';$confirm;//""",
+    ),
+    Payload(
+      "url-javascript",
+      UrlOrSrc,
+      "javascript: URL for a value reflected into href/src.",
+      s"""javascript:$confirm""",
     ),
   ).map(p => p.id -> p).toMap
 
   def get(id: String): Option[Payload] = payloads.get(id)
 
   def ids: Set[String] = payloads.keySet
+
+  /** Ids whose template targets the given reflection context. */
+  def idsFor(context: InjectionContext): Set[String] = payloads.values
+    .filter(_.context == context).map(_.id).toSet
 
   /** Escape a string for safe inclusion inside a JS string literal. Beyond the
     * usual control/quote escapes, `<` and `>` are emitted as unicode escapes so
