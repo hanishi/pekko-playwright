@@ -37,4 +37,22 @@ class FindingsReportSpec extends AnyWordSpec with Matchers {
       json("findings").arr shouldBe empty
     }
   }
+
+  "FindingsReport.toJsonSite" should {
+
+    "group findings per URL and total the count" in {
+      val f =
+        Finding(FindingKind.Xss, Severity.High, "x", reproducible = true, "r")
+      val json = FindingsReport.toJsonSite(
+        "https://seed",
+        Seq("https://seed/a" -> Seq(f), "https://seed/b" -> Seq.empty),
+      )
+      json("seed").str shouldBe "https://seed"
+      json("findingCount").num shouldBe 1.0
+      json("pages").arr should have size 2
+      json("pages")(0)("url").str shouldBe "https://seed/a"
+      json("pages")(0)("findings").arr should have size 1
+      json("pages")(1)("findings").arr shouldBe empty
+    }
+  }
 }

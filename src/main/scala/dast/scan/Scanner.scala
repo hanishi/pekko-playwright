@@ -1,13 +1,22 @@
 package dast.scan
 
+import java.util.concurrent.atomic.AtomicInteger
+
 import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
+import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+import org.apache.pekko.util.Timeout
 
 import crawler.BrowserResource
+import crawler.UrlNormalizer
 import crawler.pool.ResourcePool
+import crawler.pool.ResourcePool.Pool
 import crawler.pool.ResourcePool.asPool
 import crawler.pool.ResourcePool.submit
 import dast.Authorization
@@ -16,37 +25,75 @@ import dast.ProbeOp
 import dast.SinkScanOp
 import dast.analyzer.ClaudeAnalyzer
 
-/** Assembles the real, pool- and Claude-backed [[ScanOrchestrator.Effects]] and
-  * spawns an orchestrator. This is wiring, not logic: it is exercised only by a
-  * live scan (a consenting target + `ANTHROPIC_API_KEY`), so it is not unit
-  * tested — the orchestrator loop is tested with stubbed effects instead.
+/** Assembles the real, pool- and Claude-backed effects and spawns an
+  * orchestrator. This is wiring, not logic: it runs only against a live target
+  * (and a key for the probe path), so it is not unit tested — the orchestrators
+  * are tested with stubbed effects instead.
   *
   * The browser pool is a [[crawler.pool.ResourcePool]] of [[BrowserResource]]
-  * on the `session-pinned-dispatcher`, exactly as the crawler builds it; all
-  * capture and probe work goes through `pool.submit` to stay on the pinned
-  * thread (CLAUDE.md section 0.1).
+  * on the `session-pinned-dispatcher`; all browser work goes through
+  * `pool.submit` to stay on the pinned thread (CLAUDE.md section 0.1). The pool
+  * is built with `stealth = false` so the scanner is identifiable, not evasive
+  * (section 5).
   */
 object Scanner:
 
-  /** Spawn a browser pool and a scan orchestrator wired to it. `auth` defaults
-    * to observe-only, so a scan does capture + Tier 1 only unless the caller
-    * passes an authorization with active scope.
-    */
+  /** Spawn a browser pool and a single-URL scan orchestrator wired to it. */
   def spawn(
       ctx: ActorContext[?],
       auth: Authorization = Authorization.ObserveOnly,
       poolSize: Int = 2,
       navTimeoutMs: Int = 30000,
   )(using
+      ActorSystem[?],
+      ExecutionContext,
+  ): ActorRef[ScanOrchestrator.Command] =
+    val pool = buildPool(ctx, poolSize, navTimeoutMs)
+    ctx.spawn(
+      ScanOrchestrator(auth, scanEffects(pool, auth, navTimeoutMs)),
+      "dast-scan-orchestrator",
+    )
+
+  /** Spawn a site-scan orchestrator: discover in-scope URLs from the seed
+    * (read-only crawl) and run a full scan on each.
+    */
+  def spawnSite(
+      ctx: ActorContext[?],
+      auth: Authorization = Authorization.ObserveOnly,
+      poolSize: Int = 2,
+      navTimeoutMs: Int = 30000,
+      maxDepth: Int = 2,
+      maxPages: Int = 20,
+      perScanTimeout: FiniteDuration = 5.minutes,
+  )(using
       system: ActorSystem[?],
       ec: ExecutionContext,
-  ): ActorRef[ScanOrchestrator.Command] =
+  ): ActorRef[SiteScanOrchestrator.Command] =
+    val pool = buildPool(ctx, poolSize, navTimeoutMs)
+    val counter = new AtomicInteger(0)
+    given Timeout = Timeout(perScanTimeout)
+
+    val effects = SiteScanOrchestrator.Effects(
+      discover = seed => discover(pool, seed, maxDepth, maxPages),
+      scanOne = url =>
+        val ref = system.systemActorOf(
+          ScanOrchestrator(auth, scanEffects(pool, auth, navTimeoutMs)),
+          s"dast-scan-${counter.incrementAndGet()}",
+        )
+        ref.ask[ScanOrchestrator.ScanComplete](ScanOrchestrator.Start(url, _))
+          .map(_.findings),
+    )
+    ctx.spawn(SiteScanOrchestrator(effects, maxPages), "dast-site-orchestrator")
+
+  private def buildPool(
+      ctx: ActorContext[?],
+      poolSize: Int,
+      navTimeoutMs: Int,
+  ): Pool[BrowserResource] =
     val poolRef = ctx.spawn(
       ResourcePool[BrowserResource](
         size = poolSize,
         make = i =>
-          // DAST path is identifiable, not evasive: no stealth.js, no automation
-          // hiding, an announced UA + X-Scanner header (CLAUDE.md section 5).
           new BrowserResource(
             i,
             None,
@@ -60,9 +107,14 @@ object Scanner:
       ),
       "dast-browser-pool",
     )
-    val pool = poolRef.asPool[BrowserResource]
+    poolRef.asPool[BrowserResource]
 
-    val effects = ScanOrchestrator.Effects(
+  private def scanEffects(
+      pool: Pool[BrowserResource],
+      auth: Authorization,
+      navTimeoutMs: Int,
+  )(using ActorSystem[?], ExecutionContext): ScanOrchestrator.Effects =
+    ScanOrchestrator.Effects(
       capture = url => pool.submit(r => CaptureOp.capture(r, url)),
       analyze = context => ClaudeAnalyzer.analyze(context),
       probe = (baseUrl, point, payloadId, marker) =>
@@ -74,4 +126,42 @@ object Scanner:
           .submit(r => SinkScanOp.scan(r, baseUrl, source, marker, navTimeoutMs)),
     )
 
-    ctx.spawn(ScanOrchestrator(auth, effects), "dast-scan-orchestrator")
+  /** Read-only, same-host BFS over the pool collecting anchor hrefs to
+    * `maxDepth` / `maxPages`. Failures on a page yield no links (fail soft).
+    */
+  private def discover(
+      pool: Pool[BrowserResource],
+      seed: String,
+      maxDepth: Int,
+      maxPages: Int,
+  )(using ExecutionContext): Future[Seq[String]] =
+    val seedHost = Scope.hostOf(seed).getOrElse("")
+
+    def linksOf(url: String): Future[Seq[String]] = pool
+      .submit(r => r.withPage(url)(page => hrefs(page))).recover { case _ =>
+        Seq.empty
+      }
+
+    def loop(
+        frontier: List[String],
+        depth: Int,
+        seen: Set[String],
+        acc: Vector[String],
+    ): Future[Seq[String]] =
+      if depth > maxDepth || frontier.isEmpty || acc.size >= maxPages then
+        Future.successful(acc)
+      else
+        Future.sequence(frontier.map(linksOf)).flatMap { results =>
+          val next = results.flatten.map(UrlNormalizer.normalize)
+            .filter(u => Scope.inScope(seedHost, u) && !seen.contains(u))
+            .distinct
+          loop(next.toList, depth + 1, seen ++ next, (acc ++ next).take(maxPages))
+        }
+
+    loop(List(seed), 0, Set(UrlNormalizer.normalize(seed)), Vector.empty)
+
+  private def hrefs(page: com.microsoft.playwright.Page): Seq[String] = page
+    .evaluate(
+      "() => Array.from(document.querySelectorAll('a[href]')).map(a => a.href)",
+    ).asInstanceOf[java.util.List[?]].asScala.iterator
+    .collect { case s if s != null => s.toString }.toSeq

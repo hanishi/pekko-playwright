@@ -20,15 +20,15 @@ class SinkScanOpSpec extends AnyWordSpec with Matchers {
   "SinkScanOp.toFindings" should {
 
     "emit one reproducible DOM-XSS finding per sink reached" in {
-      val findings =
-        SinkScanOp.toFindings(InjectionPoint.Fragment, Set("innerHTML", "eval"))
+      val findings = SinkScanOp
+        .toFindings(InjectionPoint.Fragment, Set("innerHTML", "eval"))
       findings should have size 2
       findings.foreach { f =>
         f.kind shouldBe FindingKind.Xss
         f.severity shouldBe Severity.High
         f.reproducible shouldBe true
       }
-      findings.map(_.replay) should contain allOf (
+      (findings.map(_.replay) should contain).allOf(
         "domxss URL fragment sink=eval",
         "domxss URL fragment sink=innerHTML",
       )

@@ -2,9 +2,9 @@ package dast
 
 import scala.jdk.CollectionConverters.*
 
+import com.microsoft.playwright.Page
 import com.microsoft.playwright.options.LoadState
 import com.microsoft.playwright.options.WaitUntilState
-import com.microsoft.playwright.Page
 
 import crawler.BrowserResource
 
@@ -24,7 +24,8 @@ import crawler.BrowserResource
 object SinkScanOp:
 
   /** Installed before navigation: wraps the dangerous sinks and records, in
-    * `window.__dastSinks`, the name of any sink that receives the marker. */
+    * `window.__dastSinks`, the name of any sink that receives the marker.
+    */
   def sinkScanJs(marker: String): String =
     val m = PayloadLibrary.escapeJsString(marker)
     s"""(function(){
@@ -45,11 +46,10 @@ object SinkScanOp:
        |})();""".stripMargin
 
   /** Pure: parse the `__dastSinks` readback into a set of sink names. */
-  def parseSinkHits(raw: Any): Set[String] =
-    raw match
-      case l: java.util.List[?] =>
-        l.asScala.iterator.collect { case s if s != null => s.toString }.toSet
-      case _ => Set.empty
+  def parseSinkHits(raw: Any): Set[String] = raw match
+    case l: java.util.List[?] => l.asScala.iterator
+        .collect { case s if s != null => s.toString }.toSet
+    case _ => Set.empty
 
   /** Pure: a reproducible DOM-XSS finding per sink the marker reached. */
   def toFindings(source: InjectionPoint, sinks: Set[String]): Seq[Finding] =
@@ -65,21 +65,21 @@ object SinkScanOp:
 
   /** Run on the pinned thread: instrument sinks, deliver the marker via
     * `source`, read back which sinks it reached. Not unit tested (needs a live
-    * page). */
+    * page).
+    */
   def scan(
       resource: BrowserResource,
       baseUrl: String,
       source: InjectionPoint,
       marker: String,
       navTimeoutMs: Int = 15000,
-  ): Set[String] =
-    resource.withFreshPage { page =>
-      page.addInitScript(sinkScanJs(marker))
-      page.navigate(
-        source.placeInto(baseUrl, marker),
-        new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED)
-          .setTimeout(navTimeoutMs),
-      )
-      page.waitForLoadState(LoadState.DOMCONTENTLOADED)
-      parseSinkHits(page.evaluate("() => window.__dastSinks || []"))
-    }
+  ): Set[String] = resource.withFreshPage { page =>
+    page.addInitScript(sinkScanJs(marker))
+    page.navigate(
+      source.placeInto(baseUrl, marker),
+      new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED)
+        .setTimeout(navTimeoutMs),
+    )
+    page.waitForLoadState(LoadState.DOMCONTENTLOADED)
+    parseSinkHits(page.evaluate("() => window.__dastSinks || []"))
+  }
