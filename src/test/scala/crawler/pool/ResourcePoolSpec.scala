@@ -11,12 +11,16 @@ import org.scalatest.concurrent.Eventually
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
 
-import crawler.pool.ResourcePool.{asPool, submit, submitAll, submitTo}
+import crawler.pool.ResourcePool.asPool
+import crawler.pool.ResourcePool.submit
+import crawler.pool.ResourcePool.submitAll
+import crawler.pool.ResourcePool.submitTo
 
 object ResourcePoolSpec {
 
-  /** Same PinnedDispatcher the production pool uses — the testkit's
-    * ActorSystem doesn't load application.conf, so declare it here. */
+  /** Same PinnedDispatcher the production pool uses — the testkit's ActorSystem
+    * doesn't load application.conf, so declare it here.
+    */
   val config: String =
     """session-pinned-dispatcher {
       |  type     = PinnedDispatcher
@@ -25,15 +29,17 @@ object ResourcePoolSpec {
       |}
       |""".stripMargin
 
-  /** Test resource that records the thread it was constructed on (the
-    * pinned session thread) and whether it was closed. Registers itself
-    * so the test can inspect every resource the pool built. */
+  /** Test resource that records the thread it was constructed on (the pinned
+    * session thread) and whether it was closed. Registers itself so the test
+    * can inspect every resource the pool built.
+    */
   final class ProbeResource(
       val id: Int,
       registry: ConcurrentLinkedQueue[ProbeResource],
   ) extends AutoCloseable {
     val constructionThread: String = Thread.currentThread().getName
-    @volatile var closed: Boolean  = false
+    @volatile
+    var closed: Boolean = false
     registry.add(this)
 
     def threadName(): String = Thread.currentThread().getName
@@ -53,9 +59,10 @@ class ResourcePoolSpec
 
   private def newPool(size: Int) = {
     val registry = new ConcurrentLinkedQueue[ProbeResource]()
-    val ref = spawn(
-      ResourcePool[ProbeResource](size = size, make = i => new ProbeResource(i, registry)),
-    )
+    val ref = spawn(ResourcePool[ProbeResource](
+      size = size,
+      make = i => new ProbeResource(i, registry),
+    ))
     (ref.asPool[ProbeResource], registry)
   }
 
@@ -68,7 +75,8 @@ class ResourcePoolSpec
 
     "pin one session to a single thread across many submits" in {
       val (pool, registry) = newPool(1)
-      val threads = (1 to 10).map(_ => Await.result(pool.submit(_.threadName()), await))
+      val threads = (1 to 10)
+        .map(_ => Await.result(pool.submit(_.threadName()), await))
       threads.distinct should have size 1
       // Work runs on the very thread the resource was constructed on.
       eventually {
@@ -78,13 +86,15 @@ class ResourcePoolSpec
 
     "spread work across sessions round-robin" in {
       val (pool, _) = newPool(2)
-      val threads = (1 to 6).map(_ => Await.result(pool.submit(_.threadName()), await))
+      val threads = (1 to 6)
+        .map(_ => Await.result(pool.submit(_.threadName()), await))
       threads.distinct should have size 2
     }
 
     "route the same submitTo key to the same session" in {
       val (pool, _) = newPool(3)
-      val a = (1 to 4).map(_ => Await.result(pool.submitTo("key")(_.threadName()), await))
+      val a = (1 to 4)
+        .map(_ => Await.result(pool.submitTo("key")(_.threadName()), await))
       a.distinct should have size 1
     }
 

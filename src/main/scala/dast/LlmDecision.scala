@@ -13,18 +13,22 @@ sealed trait LlmDecision
 
 object LlmDecision:
 
-  /** Inject the payload identified by `payloadId` (an id in
-    * [[PayloadLibrary]], validated by the parser) at the named injection
-    * point. The model supplies only ids, never payload text. */
-  final case class Probe(injectionPointId: String, payloadId: String) extends LlmDecision
+  /** Inject the payload identified by `payloadId` (an id in [[PayloadLibrary]],
+    * validated by the parser) at the named injection point. The model supplies
+    * only ids, never payload text.
+    */
+  final case class Probe(injectionPointId: String, payloadId: String)
+      extends LlmDecision
 
   /** Move within the application using a non-state-changing navigation. */
   final case class Navigate(action: NavIntent) extends LlmDecision
 
   /** Record the model's verdict on whether a captured storage value is
-    * sensitive. A classification is advisory input to a finding, not a
-    * finding on its own (findings require a deterministic confirm step). */
-  final case class Classify(storageKey: String, verdict: Sensitivity) extends LlmDecision
+    * sensitive. A classification is advisory input to a finding, not a finding
+    * on its own (findings require a deterministic confirm step).
+    */
+  final case class Classify(storageKey: String, verdict: Sensitivity)
+      extends LlmDecision
 
   /** Nothing further to do on this page. */
   case object Done extends LlmDecision
@@ -32,7 +36,8 @@ object LlmDecision:
 /** Navigations the model may request. Restricted to actions that do not change
   * server or application state: no form submission, no destructive clicks.
   * `FollowLink` references a link id discovered during capture, not a raw URL
-  * the model invented. */
+  * the model invented.
+  */
 enum NavIntent:
   case Reload
   case Back

@@ -1,38 +1,40 @@
 package crawler.pool
 
-import org.apache.pekko.actor.typed.{ActorRef, Behavior, DispatcherSelector, SupervisorStrategy}
+import scala.concurrent.ExecutionContext
+import scala.concurrent.Future
+import scala.concurrent.Promise
+import scala.util.Failure
+import scala.util.Success
+
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.DispatcherSelector
+import org.apache.pekko.actor.typed.SupervisorStrategy
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.slf4j.LoggerFactory
 
-import scala.concurrent.{ExecutionContext, Future, Promise}
-import scala.util.{Failure, Success}
-
-/** A node-local pool of [[ResourceSession]] actors, generic over the
-  * resource type `R`. Each session holds one `R` (constructed by the
-  * supplied `make` factory on its pinned thread) and lives on its
-  * own pinned thread. Submitted work is dispatched round-robin
-  * across sessions.
+/** A node-local pool of [[ResourceSession]] actors, generic over the resource
+  * type `R`. Each session holds one `R` (constructed by the supplied `make`
+  * factory on its pinned thread) and lives on its own pinned thread. Submitted
+  * work is dispatched round-robin across sessions.
   *
-  * Total threads dedicated to the resource = `size`. Callers can
-  * outnumber sessions — extra work just queues in each session's
-  * mailbox until the pinned thread is free.
+  * Total threads dedicated to the resource = `size`. Callers can outnumber
+  * sessions — extra work just queues in each session's mailbox until the pinned
+  * thread is free.
   *
-  * The public API is one method: `submit`, exposed as a Scala 3
-  * extension on `Pool[R]`. Callers pass a typed `work: R => T` and
-  * get a `Future[T]`. The pool's internal message protocol uses
-  * `Any => Any` because Pekko message types are fixed at protocol
-  * declaration time; `Pool[R]` is a phantom-typed alias that
-  * preserves `R` at compile time without leaking it into the
+  * The public API is one method: `submit`, exposed as a Scala 3 extension on
+  * `Pool[R]`. Callers pass a typed `work: R => T` and get a `Future[T]`. The
+  * pool's internal message protocol uses `Any => Any` because Pekko message
+  * types are fixed at protocol declaration time; `Pool[R]` is a phantom-typed
+  * alias that preserves `R` at compile time without leaking it into the
   * protocol.
   */
 object ResourcePool {
 
   sealed trait Command
 
-  private final case class Submit(
-      work: Any => Any,
-      promise: Promise[Any],
-  ) extends Command
+  private final case class Submit(work: Any => Any, promise: Promise[Any])
+      extends Command
 
   private final case class SubmitTo(
       hash: Int,
@@ -40,17 +42,14 @@ object ResourcePool {
       promise: Promise[Any],
   ) extends Command
 
-  private final case class SubmitAll(
-      work: Any => Any,
-      promise: Promise[Any],
-  ) extends Command
+  private final case class SubmitAll(work: Any => Any, promise: Promise[Any])
+      extends Command
 
   case object Stop extends Command
 
   opaque type Pool[R] <: ActorRef[Command] = ActorRef[Command]
 
-  extension (ref: ActorRef[Command])
-    inline def asPool[R]: Pool[R] = ref
+  extension (ref: ActorRef[Command]) inline def asPool[R]: Pool[R] = ref
 
   def apply[R <: AutoCloseable](
       size: Int = 4,
@@ -58,12 +57,15 @@ object ResourcePool {
       dispatcherName: String = "session-pinned-dispatcher",
   ): Behavior[Command] = Behaviors.setup { ctx =>
     val log = LoggerFactory.getLogger("crawler.pool.ResourcePool")
-    log.info("starting pool of {} sessions on dispatcher '{}'", size, dispatcherName)
+    log.info(
+      "starting pool of {} sessions on dispatcher '{}'",
+      size,
+      dispatcherName,
+    )
 
-    val sessions: Vector[ActorRef[ResourceSession.Command]] =
-      Vector.tabulate(size) { i =>
-        val behavior = Behaviors
-          .supervise(ResourceSession[R](i, make))
+    val sessions: Vector[ActorRef[ResourceSession.Command]] = Vector
+      .tabulate(size) { i =>
+        val behavior = Behaviors.supervise(ResourceSession[R](i, make))
           .onFailure[Exception](SupervisorStrategy.restart)
         ctx.spawn(
           behavior,
@@ -80,7 +82,8 @@ object ResourcePool {
         routing((next + 1) % sessions.size)
 
       case SubmitTo(hash, work, promise) =>
-        sessions(Math.floorMod(hash, sessions.size)) ! ResourceSession.Submit(work, promise)
+        sessions(Math.floorMod(hash, sessions.size)) !
+          ResourceSession.Submit(work, promise)
         Behaviors.same
 
       case SubmitAll(work, promise) =>
@@ -90,7 +93,7 @@ object ResourcePool {
         }
         Future.sequence(perShard.map(_.future)).onComplete {
           case Success(vec) => promise.success(vec)
-          case Failure(t)   => promise.failure(t)
+          case Failure(t) => promise.failure(t)
         }
         Behaviors.same
 

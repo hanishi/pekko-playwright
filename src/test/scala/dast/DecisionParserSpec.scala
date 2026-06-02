@@ -16,9 +16,11 @@ class DecisionParserSpec extends AnyWordSpec with Matchers {
     }
 
     "parse the navigate variants" in {
-      DecisionParser.parse("""{"kind":"navigate","action":{"type":"reload"}}""") shouldBe
+      DecisionParser
+        .parse("""{"kind":"navigate","action":{"type":"reload"}}""") shouldBe
         Right(Navigate(NavIntent.Reload))
-      DecisionParser.parse("""{"kind":"navigate","action":{"type":"back"}}""") shouldBe
+      DecisionParser
+        .parse("""{"kind":"navigate","action":{"type":"back"}}""") shouldBe
         Right(Navigate(NavIntent.Back))
       DecisionParser.parse(
         """{"kind":"navigate","action":{"type":"followLink","linkId":"l7"}}""",
@@ -39,8 +41,8 @@ class DecisionParserSpec extends AnyWordSpec with Matchers {
     }
 
     "reject an unknown kind" in {
-      DecisionParser.parse("""{"kind":"exfiltrate"}""").left.map(_.toLowerCase) shouldBe
-        Left("unknown kind 'exfiltrate'")
+      DecisionParser.parse("""{"kind":"exfiltrate"}""").left
+        .map(_.toLowerCase) shouldBe Left("unknown kind 'exfiltrate'")
     }
 
     "reject a probe with a payloadId not in the library" in {
@@ -59,7 +61,8 @@ class DecisionParserSpec extends AnyWordSpec with Matchers {
     }
 
     "reject missing, blank, or wrong-typed fields" in {
-      DecisionParser.parse("""{"kind":"probe","payloadId":"img-onerror"}""") shouldBe
+      DecisionParser
+        .parse("""{"kind":"probe","payloadId":"img-onerror"}""") shouldBe
         Left("missing field 'injectionPointId'")
       DecisionParser.parse(
         """{"kind":"probe","injectionPointId":"  ","payloadId":"img-onerror"}""",
@@ -69,7 +72,8 @@ class DecisionParserSpec extends AnyWordSpec with Matchers {
 
     "reject malformed JSON and non-object input" in {
       DecisionParser.parse("not json").isLeft shouldBe true
-      DecisionParser.parse("""["probe"]""") shouldBe Left("decision must be a JSON object")
+      DecisionParser.parse("""["probe"]""") shouldBe
+        Left("decision must be a JSON object")
     }
 
     "ignore off-menu fields and never produce anything executable" in {

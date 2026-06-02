@@ -13,18 +13,24 @@ class UrlNormalizerSpec extends AnyWordSpec with Matchers {
     }
 
     "strip default ports" in {
-      UrlNormalizer.normalize("http://example.com:80/a") shouldBe "http://example.com/a"
-      UrlNormalizer.normalize("https://example.com:443/a") shouldBe "https://example.com/a"
+      UrlNormalizer.normalize("http://example.com:80/a") shouldBe
+        "http://example.com/a"
+      UrlNormalizer.normalize("https://example.com:443/a") shouldBe
+        "https://example.com/a"
     }
 
     "keep non-default ports" in {
-      UrlNormalizer.normalize("https://example.com:8443/a") shouldBe "https://example.com:8443/a"
+      UrlNormalizer.normalize("https://example.com:8443/a") shouldBe
+        "https://example.com:8443/a"
     }
 
     "drop a single trailing slash but keep the root slash" in {
-      UrlNormalizer.normalize("https://example.com/a/") shouldBe "https://example.com/a"
-      UrlNormalizer.normalize("https://example.com/") shouldBe "https://example.com/"
-      UrlNormalizer.normalize("https://example.com") shouldBe "https://example.com/"
+      UrlNormalizer.normalize("https://example.com/a/") shouldBe
+        "https://example.com/a"
+      UrlNormalizer.normalize("https://example.com/") shouldBe
+        "https://example.com/"
+      UrlNormalizer.normalize("https://example.com") shouldBe
+        "https://example.com/"
     }
 
     "strip tracking params, sort the rest, and drop the fragment" in {

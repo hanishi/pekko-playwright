@@ -7,6 +7,7 @@ import scala.concurrent.duration.*
 import scala.util.Failure
 import scala.util.Random
 import scala.util.Success
+
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.Behavior
@@ -14,15 +15,17 @@ import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.http.scaladsl.Http
-import org.apache.pekko.http.scaladsl.model.{HttpRequest, Uri}
+import org.apache.pekko.http.scaladsl.model.HttpRequest
+import org.apache.pekko.http.scaladsl.model.Uri
 import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshal
+
 import crawler.Crawler.CheckIfDone
 import crawler.Crawler.Command
 import crawler.Crawler.PageContent
 import crawler.Crawler.RobotsReady
 import crawler.Crawler.StartCrawling
-import crawler.PlaywrightCrawler.StartScrape
 import crawler.PlaywrightCrawler.PageScrapedResult
+import crawler.PlaywrightCrawler.StartScrape
 
 object Crawler:
 
@@ -36,10 +39,10 @@ object Crawler:
         val crawler = context
           .spawnAnonymous(PlaywrightCrawler(depths, crawlerConfig))
 
-        val seedUrl  = UrlNormalizer.normalize(crawlerConfig.seedUrl)
+        val seedUrl = UrlNormalizer.normalize(crawlerConfig.seedUrl)
         val maxDepth = crawlerConfig.maxDepth
         given ExecutionContext = context.executionContext
-        given ActorSystem[_]   = context.system
+        given ActorSystem[_] = context.system
         // Fetch + parse robots.txt once; crawl starts when it resolves.
         context.pipeToSelf(fetchRobots(Uri(seedUrl))) {
           case Success(parser) => RobotsReady(parser, seedUrl, maxDepth)
@@ -53,10 +56,12 @@ object Crawler:
     }.narrow
 
   /** Fetch and parse `/robots.txt` for the URL's host. Falls back to a
-    * permissive (allow-all) parser on any failure. */
-  private def fetchRobots(
-      uri: Uri,
-  )(using system: ActorSystem[_], ec: ExecutionContext): Future[RobotsTxtParser] = {
+    * permissive (allow-all) parser on any failure.
+    */
+  private def fetchRobots(uri: Uri)(using
+      system: ActorSystem[_],
+      ec: ExecutionContext,
+  ): Future[RobotsTxtParser] = {
     val robotsUrl = s"${uri.scheme}://${uri.authority.host}/robots.txt"
     Http().singleRequest(HttpRequest(uri = robotsUrl)).flatMap { response =>
       Unmarshal(response.entity).to[String].map(RobotsTxtParser.parse)
@@ -71,8 +76,11 @@ object Crawler:
 
   case object CheckIfDone extends Command
 
-  private case class RobotsReady(parser: RobotsTxtParser, seedUrl: String, depth: Int)
-      extends Command
+  private case class RobotsReady(
+      parser: RobotsTxtParser,
+      seedUrl: String,
+      depth: Int,
+  ) extends Command
 
 private class Crawler(
     context: ActorContext[Command | PageScrapedResult],
@@ -116,9 +124,9 @@ private class Crawler(
         running(inProgress + filteredUrls.size)
       }
     case PageScrapedResult(url, contents, links, depth, status) =>
-      val newLinks = links
-        .collect { case (href, _) => UrlNormalizer.normalize(href) }
-        .filter(href => !visitedUrls.contains(href) && robots.isAllowed(href))
+      val newLinks = links.collect { case (href, _) =>
+        UrlNormalizer.normalize(href)
+      }.filter(href => !visitedUrls.contains(href) && robots.isAllowed(href))
         .distinct
       context.log.info(s"Scraped $url at ${maxDepth - depth}. Found ${newLinks
           .size} new links. Status: $status")

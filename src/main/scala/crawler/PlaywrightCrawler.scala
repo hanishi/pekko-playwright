@@ -4,18 +4,24 @@ import scala.collection.mutable
 import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 import scala.math.max
-import scala.util.{Failure, Random, Success, Try}
+import scala.util.Failure
+import scala.util.Random
+import scala.util.Success
+import scala.util.Try
 
-import com.typesafe.config.Config
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.StashBuffer
 
+import com.typesafe.config.Config
+
 import crawler.PlaywrightCrawler.*
 import crawler.pool.ResourcePool
-import crawler.pool.ResourcePool.{Pool, asPool, submit}
+import crawler.pool.ResourcePool.Pool
+import crawler.pool.ResourcePool.asPool
+import crawler.pool.ResourcePool.submit
 
 private class PlaywrightCrawler private (
     context: ActorContext[CommandOrResponse],
@@ -36,24 +42,23 @@ private class PlaywrightCrawler private (
   private def targetsFor: Array[String] =
     if depths.isEmpty then Array("body") else crawlerConfig.targetElements
 
-  /** Submit one URL to the pool. Its pinned-thread scrape result (or
-    * failure) comes back as a [[TaskResult]] via `pipeToSelf`. */
+  /** Submit one URL to the pool. Its pinned-thread scrape result (or failure)
+    * comes back as a [[TaskResult]] via `pipeToSelf`.
+    */
   private def dispatch(
       replyTo: ActorRef[PageScrapedResult],
       url: String,
       targetElements: Array[String],
       depth: Int,
       attempt: Int,
-  ): Unit =
-    context.pipeToSelf(
-      pool.submit(_.scrape(url, targetElements, depth, linkRegex, crawlerConfig.clickSelector)),
-    )(outcome => TaskResult(replyTo, url, targetElements, depth, attempt, outcome))
+  ): Unit = context.pipeToSelf(pool.submit(
+    _.scrape(url, targetElements, depth, linkRegex, crawlerConfig.clickSelector),
+  ))(outcome => TaskResult(replyTo, url, targetElements, depth, attempt, outcome))
 
   private def idle: Behavior[CommandOrResponse] = Behaviors.receiveMessage {
     case StartScrape(replyTo, urls, depth) =>
-      context.log.info(
-        s"Starting scrape of ${urls.size} URLs with concurrency=${crawlerConfig.concurrency}.",
-      )
+      context.log.info(s"Starting scrape of ${urls
+          .size} URLs with concurrency=${crawlerConfig.concurrency}.")
       runScrape(urls, depth, replyTo)
     case other =>
       buffer.stash(other)
@@ -66,11 +71,12 @@ private class PlaywrightCrawler private (
       replyTo: ActorRef[PageScrapedResult],
       inFlight: Int = 0,
   ): Behavior[CommandOrResponse] = {
-    context.log.info(s"${urls.size} URLs remaining, $inFlight in flight at $depth")
+    context.log
+      .info(s"${urls.size} URLs remaining, $inFlight in flight at $depth")
     if (urls.isEmpty && inFlight == 0) buffer.unstashAll(idle)
     else {
-      val (urlsToProcess, remaining) =
-        urls.splitAt(max(0, crawlerConfig.concurrency - inFlight))
+      val (urlsToProcess, remaining) = urls
+        .splitAt(max(0, crawlerConfig.concurrency - inFlight))
 
       val targets = targetsFor
       urlsToProcess.foreach { url =>
@@ -101,19 +107,22 @@ private class PlaywrightCrawler private (
 
     case TaskResult(_, _, _, d, _, Success(result)) =>
       // Terminal (success or non-HTML). Forward and free the slot.
-      context.log.info(s"Scraped ${result.url}, ${result.links.size} links found")
+      context.log
+        .info(s"Scraped ${result.url}, ${result.links.size} links found")
       replyTo ! result
       depths(d) = depths(d) - 1
       runScrape(urls, depth, replyTo, max(0, inFlight - 1))
 
     case TaskResult(rt, url, targetElements, d, attempt, Failure(e)) =>
       if (attempt >= maxRetries) {
-        context.log.warn(s"Max retries reached for $url. Giving up: ${e.getMessage}")
+        context.log
+          .warn(s"Max retries reached for $url. Giving up: ${e.getMessage}")
         rt ! PageScrapedResult(url, Seq.empty, Seq.empty, d, 0)
         depths(d) = depths(d) - 1
         runScrape(urls, depth, replyTo, max(0, inFlight - 1))
       } else {
-        context.log.warn(s"Error processing $url (attempt $attempt): ${e.getMessage}")
+        context.log
+          .warn(s"Error processing $url (attempt $attempt): ${e.getMessage}")
         val delay = (Random.nextInt(5) + 1).seconds
         // Stays in flight: reschedule the same URL without freeing the slot.
         context.scheduleOnce(
@@ -137,23 +146,34 @@ object PlaywrightCrawler:
       depths: mutable.Map[Int, Int],
       crawlerConfig: CrawlerConfig,
   ): Behavior[Command] = Behaviors.setup[CommandOrResponse] { context =>
-    val cfg     = context.system.settings.config
-    val size    = poolSize(cfg)
+    val cfg = context.system.settings.config
+    val size = poolSize(cfg)
     val proxies = proxiesFromConfig(cfg)
     val poolRef = context.spawn(
       ResourcePool[BrowserResource](
         size = size,
-        make = i => new BrowserResource(i, if (proxies.isEmpty) None else Some(proxies(i % proxies.size))),
+        make = i =>
+          new BrowserResource(
+            i,
+            if (proxies.isEmpty) None else Some(proxies(i % proxies.size)),
+          ),
       ),
       "browser-pool",
     )
     Behaviors.withStash(1000)(buffer =>
-      new PlaywrightCrawler(context, buffer, depths, crawlerConfig, poolRef.asPool[BrowserResource]).idle,
+      new PlaywrightCrawler(
+        context,
+        buffer,
+        depths,
+        crawlerConfig,
+        poolRef.asPool[BrowserResource],
+      ).idle,
     )
   }.narrow
 
   private def poolSize(config: Config): Int =
-    if (config.hasPath("crawler.browser-pool.size")) config.getInt("crawler.browser-pool.size")
+    if (config.hasPath("crawler.browser-pool.size")) config
+      .getInt("crawler.browser-pool.size")
     else 4
 
   private def proxiesFromConfig(config: Config): Seq[ProxyProviderConf] = {
@@ -161,17 +181,14 @@ object PlaywrightCrawler:
     val c = config.getConfig("crawler")
     val enabled = c.hasPath("useProxy") && c.getBoolean("useProxy")
     if (!enabled || !c.hasPath("proxyProviders")) Seq.empty
-    else
-      c.getConfigList("proxyProviders").asScala
-        .map(p =>
-          ProxyProviderConf(
-            p.getString("provider"),
-            p.getString("server"),
-            p.getString("username"),
-            p.getString("password"),
-          ),
-        )
-        .toSeq
+    else c.getConfigList("proxyProviders").asScala.map(p =>
+      ProxyProviderConf(
+        p.getString("provider"),
+        p.getString("server"),
+        p.getString("username"),
+        p.getString("password"),
+      ),
+    ).toSeq
   }
 
   sealed trait Command
