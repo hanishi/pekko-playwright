@@ -2,6 +2,7 @@ package dast
 
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+
 import scala.util.Try
 
 /** Structured classification of whether a single stored value looks like a
@@ -18,8 +19,17 @@ object SecretClassifier:
   final case class Hit(kind: Kind, detail: String)
 
   /** Vendor token prefixes that are unambiguous on their own. */
-  private val knownPrefixes: Seq[String] =
-    Seq("sk-", "ghp_", "gho_", "github_pat_", "xoxb-", "xoxp-", "AKIA", "AIza", "ya29.")
+  private val knownPrefixes: Seq[String] = Seq(
+    "sk-",
+    "ghp_",
+    "gho_",
+    "github_pat_",
+    "xoxb-",
+    "xoxp-",
+    "AKIA",
+    "AIza",
+    "ya29.",
+  )
 
   private val tokenCharset = "^[A-Za-z0-9_\\-+/=]+$".r
 
@@ -28,15 +38,20 @@ object SecretClassifier:
     if looksLikeJwt(v) then Some(Hit(Kind.Jwt, "JWT structure"))
     else
       knownPrefixes.find(v.startsWith) match
-        case Some(p) => Some(Hit(Kind.KnownCredential, s"known credential prefix '$p'"))
+        case Some(p) =>
+          Some(Hit(Kind.KnownCredential, s"known credential prefix '$p'"))
         case None =>
           val e = shannonEntropy(v)
           if isHighEntropyToken(v, e) then
-            Some(Hit(Kind.HighEntropyToken, f"high-entropy token ($e%.1f bits/char)"))
+            Some(Hit(
+              Kind.HighEntropyToken,
+              f"high-entropy token ($e%.1f bits/char)",
+            ))
           else None
 
   /** Three non-empty base64url segments whose header decodes to JSON naming an
-    * algorithm. Avoids matching arbitrary dotted strings. */
+    * algorithm. Avoids matching arbitrary dotted strings.
+    */
   def looksLikeJwt(s: String): Boolean =
     val parts = s.split("\\.", -1)
     parts.length == 3 &&
@@ -45,13 +60,12 @@ object SecretClassifier:
 
   /** Genuine-looking randomness: long enough, token-shaped (no whitespace or
     * prose punctuation), mixing letters and digits, with high entropy. The
-    * mixed-class requirement rejects long dictionary words and pure numeric ids. */
+    * mixed-class requirement rejects long dictionary words and pure numeric
+    * ids.
+    */
   def isHighEntropyToken(v: String, entropy: Double): Boolean =
-    v.length >= 20 &&
-    tokenCharset.matches(v) &&
-    v.exists(_.isLetter) &&
-    v.exists(_.isDigit) &&
-    entropy >= 3.5
+    v.length >= 20 && tokenCharset.matches(v) && v.exists(_.isLetter) &&
+      v.exists(_.isDigit) && entropy >= 3.5
 
   /** Shannon entropy in bits per character. */
   def shannonEntropy(s: String): Double =
@@ -67,4 +81,5 @@ object SecretClassifier:
     val padded = seg.length % 4 match
       case 0 => seg
       case r => seg + ("=" * (4 - r))
-    Try(new String(Base64.getUrlDecoder.decode(padded), StandardCharsets.UTF_8)).toOption
+    Try(new String(Base64.getUrlDecoder.decode(padded), StandardCharsets.UTF_8))
+      .toOption

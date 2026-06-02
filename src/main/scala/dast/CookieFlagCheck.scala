@@ -16,14 +16,22 @@ object CookieFlagCheck:
     val n = name.toLowerCase
     sessionHints.exists(n.contains)
 
-  def check(snapshot: ClientStateSnapshot): Seq[Finding] =
-    snapshot.cookies.flatMap { c =>
+  def check(snapshot: ClientStateSnapshot): Seq[Finding] = snapshot.cookies
+    .flatMap { c =>
       val sessiony = looksSessiony(c.name)
-      val out      = Seq.newBuilder[Finding]
+      val out = Seq.newBuilder[Finding]
       if !c.httpOnly then
-        out += finding(c, "HttpOnly", if sessiony then Severity.High else Severity.Low)
+        out += finding(
+          c,
+          "HttpOnly",
+          if sessiony then Severity.High else Severity.Low,
+        )
       if !c.secure then
-        out += finding(c, "Secure", if sessiony then Severity.Medium else Severity.Low)
+        out += finding(
+          c,
+          "Secure",
+          if sessiony then Severity.Medium else Severity.Low,
+        )
       if c.sameSite.isEmpty then out += finding(c, "SameSite", Severity.Low)
       out.result()
     }

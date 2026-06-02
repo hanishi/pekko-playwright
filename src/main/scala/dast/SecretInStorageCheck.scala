@@ -11,17 +11,20 @@ package dast
 object SecretInStorageCheck:
 
   def check(snapshot: ClientStateSnapshot): Seq[Finding] =
-    val entries =
-      snapshot.localStorage.iterator.map(kv => ("localStorage", kv._1, kv._2)) ++
-        snapshot.sessionStorage.iterator.map(kv => ("sessionStorage", kv._1, kv._2))
+    val entries = snapshot.localStorage.iterator
+      .map(kv => ("localStorage", kv._1, kv._2)) ++
+      snapshot.sessionStorage.iterator.map(kv => ("sessionStorage", kv._1, kv._2))
 
     entries.flatMap { case (store, key, value) =>
       SecretClassifier.classify(value).map { hit =>
         val base = hit.kind match
-          case SecretClassifier.Kind.Jwt | SecretClassifier.Kind.KnownCredential => Severity.High
-          case SecretClassifier.Kind.HighEntropyToken                            => Severity.Medium
+          case SecretClassifier.Kind.Jwt | SecretClassifier.Kind
+                .KnownCredential => Severity.High
+          case SecretClassifier.Kind.HighEntropyToken => Severity.Medium
         val severity =
-          if snapshot.observedAuthFlow && base == Severity.High then Severity.Critical else base
+          if snapshot.observedAuthFlow && base == Severity.High then
+            Severity.Critical
+          else base
         Finding(
           kind = FindingKind.SecretInStorage,
           severity = severity,
