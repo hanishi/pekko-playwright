@@ -35,6 +35,7 @@ object Scanner:
       ctx: ActorContext[?],
       auth: Authorization = Authorization.ObserveOnly,
       poolSize: Int = 2,
+      navTimeoutMs: Int = 30000,
   )(using
       system: ActorSystem[?],
       ec: ExecutionContext,
@@ -42,7 +43,12 @@ object Scanner:
     val poolRef = ctx.spawn(
       ResourcePool[BrowserResource](
         size = poolSize,
-        make = i => new BrowserResource(i, None),
+        make = i =>
+          new BrowserResource(
+            i,
+            None,
+            BrowserResource.Settings(navigationTimeoutMs = navTimeoutMs),
+          ),
       ),
       "dast-browser-pool",
     )
@@ -52,9 +58,9 @@ object Scanner:
       capture = url => pool.submit(r => CaptureOp.capture(r, url)),
       analyze = context => ClaudeAnalyzer.analyze(context),
       probe = (baseUrl, point, payloadId, marker) =>
-        pool
-          .submit(r => ProbeOp.probe(r, auth, baseUrl, point, payloadId, marker))
-          .map(_.toOption.flatten),
+        pool.submit(r =>
+          ProbeOp.probe(r, auth, baseUrl, point, payloadId, marker, navTimeoutMs),
+        ).map(_.toOption.flatten),
     )
 
     ctx.spawn(ScanOrchestrator(auth, effects), "dast-scan-orchestrator")

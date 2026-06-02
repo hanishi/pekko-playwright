@@ -77,6 +77,7 @@ object ProbeOp:
       point: InjectionPoint,
       payloadId: String,
       marker: String,
+      navTimeoutMs: Int = 15000,
   ): Either[String, Option[Finding]] = precheck(auth, baseUrl, payloadId)
     .map { payload =>
       val url = point.placeInto(baseUrl, payload.render(marker))
@@ -85,7 +86,8 @@ object ProbeOp:
         page.navigate(
           url,
           new Page.NavigateOptions()
-            .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(15000),
+            .setWaitUntil(WaitUntilState.DOMCONTENTLOADED)
+            .setTimeout(navTimeoutMs),
         )
         page.waitForLoadState(LoadState.DOMCONTENTLOADED)
         firedMarkers(page.evaluate("() => window.__dastFired || []"))
