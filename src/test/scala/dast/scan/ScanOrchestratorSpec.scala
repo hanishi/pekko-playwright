@@ -12,25 +12,44 @@ import dast.*
 import dast.LlmDecision.*
 import dast.scan.ScanOrchestrator.*
 
-class ScanOrchestratorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with Matchers {
+class ScanOrchestratorSpec
+    extends ScalaTestWithActorTestKit with AnyWordSpecLike with Matchers {
 
   // A snapshot whose insecure session cookie yields deterministic Tier 1 findings.
   private val snapshot = ClientStateSnapshot(
     url = "https://example.com/p",
-    cookies = Seq(Cookie("sessionid", "v", "example.com", "/", httpOnly = false, secure = false, sameSite = None)),
+    cookies = Seq(Cookie(
+      "sessionid",
+      "v",
+      "example.com",
+      "/",
+      httpOnly = false,
+      secure = false,
+      sameSite = None,
+    )),
   )
   private val tier1 = Tier1.run(snapshot).toVector
 
-  private val target       = "https://example.com/p?q=1"
-  private val probeFinding = Finding(FindingKind.Xss, Severity.High, "executed at q", reproducible = true, "probe q")
+  private val target = "https://example.com/p?q=1"
+  private val probeFinding = Finding(
+    FindingKind.Xss,
+    Severity.High,
+    "executed at q",
+    reproducible = true,
+    "probe q",
+  )
 
   private def effects(
       analyze: AnalyzerCtxF,
       probe: (String, InjectionPoint, String, String) => Future[Option[Finding]],
-  ): Effects =
-    Effects(capture = _ => Future.successful(snapshot), analyze = analyze, probe = probe)
+  ): Effects = Effects(
+    capture = _ => Future.successful(snapshot),
+    analyze = analyze,
+    probe = probe,
+  )
 
-  private type AnalyzerCtxF = dast.analyzer.AnalyzerContext => Future[LlmDecision]
+  private type AnalyzerCtxF =
+    dast.analyzer.AnalyzerContext => Future[LlmDecision]
 
   "ScanOrchestrator" should {
 
@@ -40,7 +59,9 @@ class ScanOrchestratorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
         Authorization.ObserveOnly,
         effects(
           analyze = _ => Future.successful(Probe("q", "img-onerror")), // always wants to probe
-          probe = (_, _, _, _) => { probeCalls.incrementAndGet(); Future.successful(Some(probeFinding)) },
+          probe = (_, _, _, _) => {
+            probeCalls.incrementAndGet(); Future.successful(Some(probeFinding))
+          },
         ),
         maxSteps = 3,
       ))
@@ -58,7 +79,11 @@ class ScanOrchestratorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
         Authorization.active("example.com"),
         effects(
           analyze = _ =>
-            Future.successful(if analyzeCalls.getAndIncrement() == 0 then Probe("q", "img-onerror") else Done),
+            Future.successful(
+              if analyzeCalls.getAndIncrement() == 0 then
+                Probe("q", "img-onerror")
+              else Done,
+            ),
           probe = (_, _, _, _) => Future.successful(Some(probeFinding)),
         ),
       ))
@@ -75,7 +100,9 @@ class ScanOrchestratorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
         Authorization.active("example.com"),
         effects(
           analyze = _ => Future.successful(Probe("q", "img-onerror")),
-          probe = (_, _, _, _) => { probeCalls.incrementAndGet(); Future.successful(None) },
+          probe = (_, _, _, _) => {
+            probeCalls.incrementAndGet(); Future.successful(None)
+          },
         ),
         maxSteps = 2,
       ))

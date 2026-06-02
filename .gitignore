@@ -41,4 +41,9 @@ build/
 .DS_Store
 
 ### Scala ###
-.bsp/
+.bsp/.env.local
+
+# Local secrets — never commit
+.env.local
+.env
+.env.*

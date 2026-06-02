@@ -43,7 +43,8 @@ object ScanOrchestrator:
   sealed trait Command
 
   /** Begin a scan of `target`; the result is sent to `replyTo`. */
-  final case class Start(target: String, replyTo: ActorRef[ScanComplete]) extends Command
+  final case class Start(target: String, replyTo: ActorRef[ScanComplete])
+      extends Command
 
   /** The scan result: every finding (Tier 1 + confirmed probes). */
   final case class ScanComplete(target: String, findings: Vector[Finding])
@@ -55,29 +56,38 @@ object ScanOrchestrator:
       probe: (String, InjectionPoint, String, String) => Future[Option[Finding]],
   )
 
-  private final case class SnapshotReady(snapshot: ClientStateSnapshot) extends Command
-  private final case class CaptureFailed(reason: String)                extends Command
-  private final case class DecisionReady(decision: LlmDecision)         extends Command
-  private final case class ProbeResult(finding: Option[Finding])        extends Command
+  private final case class SnapshotReady(snapshot: ClientStateSnapshot)
+      extends Command
+  private final case class CaptureFailed(reason: String) extends Command
+  private final case class DecisionReady(decision: LlmDecision) extends Command
+  private final case class ProbeResult(finding: Option[Finding]) extends Command
 
-  /** Injection-point candidates derived from a URL's query-param names. Pure. */
-  def injectionPointsOf(url: String): Seq[String] =
-    Try(new java.net.URI(url).getRawQuery).toOption
-      .flatMap(Option(_))
-      .map(_.split("&").toSeq.filter(_.nonEmpty).map(_.split("=", 2)(0)).distinct)
-      .getOrElse(Seq.empty)
+  /** Injection-point candidates derived from a URL's query-param names. Pure.
+    */
+  def injectionPointsOf(url: String): Seq[String] = Try(
+    new java.net.URI(url).getRawQuery,
+  ).toOption.flatMap(Option(_))
+    .map(_.split("&").toSeq.filter(_.nonEmpty).map(_.split("=", 2)(0)).distinct)
+    .getOrElse(Seq.empty)
 
   def apply(
       auth: Authorization,
       effects: Effects,
       maxSteps: Int = 8,
       freshMarker: () => String = () => Markers.fresh(),
-  ): Behavior[Command] =
-    Behaviors.setup { ctx =>
-      Behaviors.receiveMessagePartial { case Start(target, replyTo) =>
-        new ScanOrchestrator(ctx, auth, effects, maxSteps, freshMarker, target, replyTo).begin()
-      }
+  ): Behavior[Command] = Behaviors.setup { ctx =>
+    Behaviors.receiveMessagePartial { case Start(target, replyTo) =>
+      new ScanOrchestrator(
+        ctx,
+        auth,
+        effects,
+        maxSteps,
+        freshMarker,
+        target,
+        replyTo,
+      ).begin()
     }
+  }
 
 private class ScanOrchestrator(
     ctx: ActorContext[ScanOrchestrator.Command],
@@ -99,13 +109,14 @@ private class ScanOrchestrator(
     }
     awaitingCapture
 
-  private def awaitingCapture: Behavior[Command] = Behaviors.receiveMessagePartial {
-    case SnapshotReady(snapshot) =>
-      step(snapshot, Tier1.run(snapshot).toVector, maxSteps)
-    case CaptureFailed(reason) =>
-      ctx.log.warn("Capture failed for {}: {}", target, reason)
-      finish(Vector.empty)
-  }
+  private def awaitingCapture: Behavior[Command] = Behaviors
+    .receiveMessagePartial {
+      case SnapshotReady(snapshot) =>
+        step(snapshot, Tier1.run(snapshot).toVector, maxSteps)
+      case CaptureFailed(reason) =>
+        ctx.log.warn("Capture failed for {}: {}", target, reason)
+        finish(Vector.empty)
+    }
 
   private def step(
       snapshot: ClientStateSnapshot,
@@ -127,8 +138,7 @@ private class ScanOrchestrator(
       findings: Vector[Finding],
       budget: Int,
   ): Behavior[Command] = Behaviors.receiveMessagePartial {
-    case DecisionReady(Done) =>
-      finish(findings)
+    case DecisionReady(Done) => finish(findings)
     case DecisionReady(Probe(injectionPointId, payloadId)) =>
       ConsentGate.decide(auth, ActionClass.Active, target) match
         case GateDecision.Permit =>
@@ -149,9 +159,10 @@ private class ScanOrchestrator(
       snapshot: ClientStateSnapshot,
       findings: Vector[Finding],
       budget: Int,
-  ): Behavior[Command] = Behaviors.receiveMessagePartial { case ProbeResult(found) =>
-    step(snapshot, findings ++ found.toVector, budget - 1)
-  }
+  ): Behavior[Command] = Behaviors
+    .receiveMessagePartial { case ProbeResult(found) =>
+      step(snapshot, findings ++ found.toVector, budget - 1)
+    }
 
   private def finish(findings: Vector[Finding]): Behavior[Command] =
     ctx.log.info("Scan complete for {}: {} finding(s)", target, findings.size)

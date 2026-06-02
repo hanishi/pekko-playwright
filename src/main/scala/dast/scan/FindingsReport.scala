@@ -8,22 +8,20 @@ import dast.Finding
   */
 object FindingsReport:
 
-  def toJson(target: String, findings: Seq[Finding]): ujson.Value =
-    ujson.Obj(
-      "target" -> target,
-      "findingCount" -> findings.size,
-      "findings" -> ujson.Arr.from(findings.map(findingJson)),
-    )
+  def toJson(target: String, findings: Seq[Finding]): ujson.Value = ujson.Obj(
+    "target" -> target,
+    "findingCount" -> findings.size,
+    "findings" -> ujson.Arr.from(findings.map(findingJson)),
+  )
 
   /** Pretty-printed JSON string. */
-  def render(target: String, findings: Seq[Finding]): String =
-    ujson.write(toJson(target, findings), indent = 2)
+  def render(target: String, findings: Seq[Finding]): String = ujson
+    .write(toJson(target, findings), indent = 2)
 
-  private def findingJson(f: Finding): ujson.Value =
-    ujson.Obj(
-      "kind" -> f.kind.toString,
-      "severity" -> f.severity.toString,
-      "evidence" -> f.evidence,
-      "reproducible" -> f.reproducible,
-      "replay" -> f.replay,
-    )
+  private def findingJson(f: Finding): ujson.Value = ujson.Obj(
+    "kind" -> f.kind.toString,
+    "severity" -> f.severity.toString,
+    "evidence" -> f.evidence,
+    "reproducible" -> f.reproducible,
+    "replay" -> f.replay,
+  )

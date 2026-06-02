@@ -20,8 +20,8 @@ import dast.analyzer.ClaudeAnalyzer
   * live scan (a consenting target + `ANTHROPIC_API_KEY`), so it is not unit
   * tested — the orchestrator loop is tested with stubbed effects instead.
   *
-  * The browser pool is a [[crawler.pool.ResourcePool]] of [[BrowserResource]] on
-  * the `session-pinned-dispatcher`, exactly as the crawler builds it; all
+  * The browser pool is a [[crawler.pool.ResourcePool]] of [[BrowserResource]]
+  * on the `session-pinned-dispatcher`, exactly as the crawler builds it; all
   * capture and probe work goes through `pool.submit` to stay on the pinned
   * thread (CLAUDE.md section 0.1).
   */
@@ -29,14 +29,21 @@ object Scanner:
 
   /** Spawn a browser pool and a scan orchestrator wired to it. `auth` defaults
     * to observe-only, so a scan does capture + Tier 1 only unless the caller
-    * passes an authorization with active scope. */
+    * passes an authorization with active scope.
+    */
   def spawn(
       ctx: ActorContext[?],
       auth: Authorization = Authorization.ObserveOnly,
       poolSize: Int = 2,
-  )(using system: ActorSystem[?], ec: ExecutionContext): ActorRef[ScanOrchestrator.Command] =
+  )(using
+      system: ActorSystem[?],
+      ec: ExecutionContext,
+  ): ActorRef[ScanOrchestrator.Command] =
     val poolRef = ctx.spawn(
-      ResourcePool[BrowserResource](size = poolSize, make = i => new BrowserResource(i, None)),
+      ResourcePool[BrowserResource](
+        size = poolSize,
+        make = i => new BrowserResource(i, None),
+      ),
       "dast-browser-pool",
     )
     val pool = poolRef.asPool[BrowserResource]

@@ -12,7 +12,13 @@ class FindingsReportSpec extends AnyWordSpec with Matchers {
   "FindingsReport.toJson" should {
 
     "serialize a finding's fields" in {
-      val f = Finding(FindingKind.Xss, Severity.High, "executed at q", reproducible = true, "probe q")
+      val f = Finding(
+        FindingKind.Xss,
+        Severity.High,
+        "executed at q",
+        reproducible = true,
+        "probe q",
+      )
       val json = FindingsReport.toJson("https://target", Seq(f))
 
       json("target").str shouldBe "https://target"
