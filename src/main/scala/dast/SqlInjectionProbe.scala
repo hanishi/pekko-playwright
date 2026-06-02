@@ -61,7 +61,8 @@ object SqlInjectionProbe:
         }
     }
 
-  /** Error-based verdict: an error signature present now but not in baseline. */
+  /** Error-based verdict: an error signature present now but not in baseline.
+    */
   private def errorFinding(
       point: InjectionPoint,
       baselineBody: String,
@@ -81,8 +82,7 @@ object SqlInjectionProbe:
   )(using ActorSystem[?], ExecutionContext): Future[Option[Finding]] =
     SqlInjectionCheck.timePayloads(original)
       .foldLeft(Future.successful(Option.empty[Finding])) {
-        case (acc, (label, value)) =>
-          acc.flatMap {
+        case (acc, (label, value)) => acc.flatMap {
             case some @ Some(_) => Future.successful(some)
             case None =>
               val url = point.placeInto(target, value)
@@ -115,9 +115,8 @@ object SqlInjectionProbe:
     )
     val start = System.nanoTime()
     Http()(system).singleRequest(request).flatMap { response =>
-      Unmarshal(response.entity).to[String].map { body =>
-        Some(((System.nanoTime() - start) / 1000000L, body))
-      }
+      Unmarshal(response.entity).to[String]
+        .map(body => Some(((System.nanoTime() - start) / 1000000L, body)))
     }.recover { case t =>
       log.warn("SQLi probe error for {}: {}", url, t.getMessage)
       None

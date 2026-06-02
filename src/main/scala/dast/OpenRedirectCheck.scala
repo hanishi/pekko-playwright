@@ -19,15 +19,15 @@ object OpenRedirectCheck:
   /** Reserved, non-resolving host used as the redirect sentinel. */
   val SentinelHost = "dast-redirect-probe.example"
 
-  /** Payloads tried per parameter: a fully-qualified URL and the scheme-relative
-    * bypass that defeats naive `startsWith("/")` allow-listing.
+  /** Payloads tried per parameter: a fully-qualified URL and the
+    * scheme-relative bypass that defeats naive `startsWith("/")` allow-listing.
     */
-  val payloads: Seq[String] =
-    Seq(s"https://$SentinelHost/", s"//$SentinelHost/")
+  val payloads: Seq[String] = Seq(s"https://$SentinelHost/", s"//$SentinelHost/")
 
   /** Query-parameter names of a URL (the redirect surfaces we probe). Pure. */
-  def paramNames(url: String): Seq[String] = Try(new java.net.URI(url).getRawQuery)
-    .toOption.flatMap(Option(_))
+  def paramNames(url: String): Seq[String] = Try(
+    new java.net.URI(url).getRawQuery,
+  ).toOption.flatMap(Option(_))
     .map(_.split("&").toSeq.filter(_.nonEmpty).map(_.split("=", 2)(0)).distinct)
     .getOrElse(Seq.empty)
 

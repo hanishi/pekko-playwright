@@ -12,9 +12,9 @@ class SqlInjectionCheckSpec extends AnyWordSpec with Matchers {
       SqlInjectionCheck.detectError(
         "Warning: You have an error in your SQL syntax near ''",
       ) shouldBe Some("MySQL")
-      SqlInjectionCheck
-        .detectError("Unclosed quotation mark after the character string") shouldBe
-        Some("MSSQL")
+      SqlInjectionCheck.detectError(
+        "Unclosed quotation mark after the character string",
+      ) shouldBe Some("MSSQL")
       SqlInjectionCheck.detectError("ORA-00933: command not properly ended")
         .map(_ => "ora") shouldBe Some("ora")
     }
@@ -32,8 +32,8 @@ class SqlInjectionCheckSpec extends AnyWordSpec with Matchers {
   "SqlInjectionCheck.timePayloads" should {
     "embed the original value and the configured delay, covering engines" in {
       val ps = SqlInjectionCheck.timePayloads("42")
-      ps.map(_._1) should contain allOf
-        ("mysql-sleep", "postgres-pg_sleep", "mssql-waitfor")
+      (ps.map(_._1) should contain)
+        .allOf("mysql-sleep", "postgres-pg_sleep", "mssql-waitfor")
       ps.map(_._2).foreach { v =>
         v should startWith("42")
         v should include(SqlInjectionCheck.delaySeconds.toString)
@@ -43,7 +43,8 @@ class SqlInjectionCheckSpec extends AnyWordSpec with Matchers {
 
   "SqlInjectionCheck.confirmsTiming" should {
     "confirm only when the injected request beats baseline by the threshold" in {
-      SqlInjectionCheck.confirmsTiming(100, 100 + SqlInjectionCheck.delayThresholdMs) shouldBe
+      SqlInjectionCheck
+        .confirmsTiming(100, 100 + SqlInjectionCheck.delayThresholdMs) shouldBe
         true
       SqlInjectionCheck.confirmsTiming(100, 100 + 500) shouldBe false
       // A faster injected response never confirms.

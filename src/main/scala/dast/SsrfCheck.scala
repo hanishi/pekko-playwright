@@ -16,8 +16,9 @@ import scala.util.Try
 object SsrfCheck:
 
   /** Query-parameter names of a URL: the surfaces probed. Pure. */
-  def paramNames(url: String): Seq[String] = Try(new java.net.URI(url).getRawQuery)
-    .toOption.flatMap(Option(_))
+  def paramNames(url: String): Seq[String] = Try(
+    new java.net.URI(url).getRawQuery,
+  ).toOption.flatMap(Option(_))
     .map(_.split("&").toSeq.filter(_.nonEmpty).map(_.split("=", 2)(0)).distinct)
     .getOrElse(Seq.empty)
 
@@ -26,14 +27,13 @@ object SsrfCheck:
     s"${oastBaseUrl.stripSuffix("/")}/$token"
 
   /** True when the listener recorded this probe's token (server-side fetch). */
-  def confirms(token: String, received: Set[String]): Boolean =
-    received.contains(token)
+  def confirms(token: String, received: Set[String]): Boolean = received
+    .contains(token)
 
   def toFinding(point: InjectionPoint, token: String): Finding = Finding(
     kind = FindingKind.Ssrf,
     severity = Severity.High,
-    evidence =
-      s"${point.describe} caused a server-side request to an out-of-band host (token $token)",
+    evidence = s"${point.describe} caused a server-side request to an out-of-band host (token $token)",
     reproducible = true,
     replay = s"ssrf ${point.describe} token=$token",
   )

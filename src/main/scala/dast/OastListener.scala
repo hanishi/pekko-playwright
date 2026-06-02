@@ -14,7 +14,8 @@ import org.slf4j.LoggerFactory
   * does not depend on the concrete server.
   */
 trait Oast:
-  /** Base URL the target must be able to reach (a path is appended per token). */
+  /** Base URL the target must be able to reach (a path is appended per token).
+    */
   def baseUrl: String
 
   /** True once a request carrying `token` has reached the sink. */
@@ -23,16 +24,15 @@ trait Oast:
 /** A minimal out-of-band callback server. Any HTTP request whose first path
   * segment is a token records that token; the SSRF probe later asks [[saw]].
   *
-  * This is the honest SSRF oracle (CLAUDE.md section 0.4): a finding requires an
-  * actual server-side request from the target to this listener, not a guess.
+  * This is the honest SSRF oracle (CLAUDE.md section 0.4): a finding requires
+  * an actual server-side request from the target to this listener, not a guess.
   * For a real target the `baseUrl` must be externally reachable (a tunnel /
   * public address); for local testing it binds on loopback. Live-only.
   */
 final class OastListener(host: String, port: Int) extends Oast:
 
   private val log = LoggerFactory.getLogger("dast.OastListener")
-  private val tokens =
-    java.util.concurrent.ConcurrentHashMap.newKeySet[String]()
+  private val tokens = java.util.concurrent.ConcurrentHashMap.newKeySet[String]()
 
   def baseUrl: String = s"http://$host:$port"
 
@@ -42,16 +42,15 @@ final class OastListener(host: String, port: Int) extends Oast:
   def start()(using
       system: ActorSystem[?],
       ec: ExecutionContext,
-  ): Future[Unit] =
-    Http()(system).newServerAt(host, port).bindSync { request =>
-      request.uri.path.toString.split("/").iterator.map(_.trim)
-        .find(_.nonEmpty).foreach { token =>
-          tokens.add(token)
-          log.info("OAST callback received for token {}", token)
-        }
-      request.discardEntityBytes()
-      HttpResponse(StatusCodes.OK, entity = "ok")
-    }.map { binding =>
-      log.info("OAST listener bound at {}", baseUrl)
-      ()
-    }
+  ): Future[Unit] = Http()(system).newServerAt(host, port).bindSync { request =>
+    request.uri.path.toString.split("/").iterator.map(_.trim).find(_.nonEmpty)
+      .foreach { token =>
+        tokens.add(token)
+        log.info("OAST callback received for token {}", token)
+      }
+    request.discardEntityBytes()
+    HttpResponse(StatusCodes.OK, entity = "ok")
+  }.map { binding =>
+    log.info("OAST listener bound at {}", baseUrl)
+    ()
+  }

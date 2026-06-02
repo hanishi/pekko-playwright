@@ -9,7 +9,8 @@ class OpenRedirectCheckSpec extends AnyWordSpec with Matchers {
 
   "OpenRedirectCheck.paramNames" should {
     "list distinct query parameter names" in {
-      OpenRedirectCheck.paramNames("https://x.test/go?next=1&u=2&next=3") shouldBe
+      OpenRedirectCheck
+        .paramNames("https://x.test/go?next=1&u=2&next=3") shouldBe
         Seq("next", "u")
     }
     "be empty when there is no query" in {

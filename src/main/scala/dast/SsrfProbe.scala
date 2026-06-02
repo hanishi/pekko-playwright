@@ -50,15 +50,14 @@ object SsrfProbe:
     val token = Markers.fresh()
     val injected = point
       .placeInto(target, SsrfCheck.callbackUrl(oast.baseUrl, token))
-    fire(injected).flatMap(_ => waitForToken(oast, token, PollAttempts)).map {
-      seen => Option.when(seen)(SsrfCheck.toFinding(point, token))
-    }
+    fire(injected).flatMap(_ => waitForToken(oast, token, PollAttempts))
+      .map(seen => Option.when(seen)(SsrfCheck.toFinding(point, token)))
 
-  /** Send the injection request; its own response is irrelevant. Never fails. */
-  private def fire(url: String)(using
-      system: ActorSystem[?],
-      ec: ExecutionContext,
-  ): Future[Unit] =
+  /** Send the injection request; its own response is irrelevant. Never fails.
+    */
+  private def fire(
+      url: String,
+  )(using system: ActorSystem[?], ec: ExecutionContext): Future[Unit] =
     val request = HttpRequest(
       method = HttpMethods.GET,
       uri = url,
@@ -79,6 +78,7 @@ object SsrfProbe:
   ): Future[Boolean] =
     if oast.saw(token) then Future.successful(true)
     else if attempts <= 0 then Future.successful(false)
-    else after(PollInterval, system.toClassic.scheduler)(
-      waitForToken(oast, token, attempts - 1),
-    )
+    else
+      after(PollInterval, system.toClassic.scheduler)(
+        waitForToken(oast, token, attempts - 1),
+      )

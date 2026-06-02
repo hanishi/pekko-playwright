@@ -11,9 +11,10 @@ import scala.util.Try
   *     DB error. Confirmed only when an error signature appears that was NOT in
   *     the baseline response (so a page that always shows the text is not a
   *     false positive).
-  *   - Time-based: a DB-specific `SLEEP`/`pg_sleep`/`WAITFOR` makes the response
-  *     measurably slower. Confirmed only when the injected request is slower
-  *     than the baseline by [[delayThresholdMs]] (execution proof, not text).
+  *   - Time-based: a DB-specific `SLEEP`/`pg_sleep`/`WAITFOR` makes the
+  *     response measurably slower. Confirmed only when the injected request is
+  *     slower than the baseline by [[delayThresholdMs]] (execution proof, not
+  *     text).
   *
   * The browser-free HTTP requests live in [[SqlInjectionProbe]]; the decisions
   * here (signature match, timing verdict, payload list) are pure and tested.
@@ -30,8 +31,9 @@ object SqlInjectionCheck:
   val delayThresholdMs = 3500L
 
   /** Query-parameter names of a URL: the surfaces probed. Pure. */
-  def paramNames(url: String): Seq[String] = Try(new java.net.URI(url).getRawQuery)
-    .toOption.flatMap(Option(_))
+  def paramNames(url: String): Seq[String] = Try(
+    new java.net.URI(url).getRawQuery,
+  ).toOption.flatMap(Option(_))
     .map(_.split("&").toSeq.filter(_.nonEmpty).map(_.split("=", 2)(0)).distinct)
     .getOrElse(Seq.empty)
 
@@ -75,15 +77,16 @@ object SqlInjectionCheck:
       "mssql-waitfor" -> s"$original'; WAITFOR DELAY '0:0:$s'-- -",
     )
 
-  /** True when the injected request was slower than baseline by the threshold. */
+  /** True when the injected request was slower than baseline by the threshold.
+    */
   def confirmsTiming(baselineMs: Long, injectedMs: Long): Boolean =
     injectedMs - baselineMs >= delayThresholdMs
 
   def errorFinding(point: InjectionPoint, db: String): Finding = Finding(
     kind = FindingKind.SqlInjection,
     severity = Severity.High,
-    evidence =
-      s"${point.describe} triggers a $db error when a quote is injected (error-based)",
+    evidence = s"${point
+        .describe} triggers a $db error when a quote is injected (error-based)",
     reproducible = true,
     replay = s"sqli ${point.describe} technique=error",
   )
@@ -91,8 +94,8 @@ object SqlInjectionCheck:
   def timeFinding(point: InjectionPoint, label: String): Finding = Finding(
     kind = FindingKind.SqlInjection,
     severity = Severity.High,
-    evidence =
-      s"${point.describe} delays the response under a time-based payload ($label)",
+    evidence = s"${point
+        .describe} delays the response under a time-based payload ($label)",
     reproducible = true,
     replay = s"sqli ${point.describe} technique=time payload=$label",
   )

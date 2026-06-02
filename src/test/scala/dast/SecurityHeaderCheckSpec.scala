@@ -27,9 +27,8 @@ class SecurityHeaderCheckSpec extends AnyWordSpec with Matchers {
   "SecurityHeaderCheck" should {
 
     "report nothing when no response was captured (status 0)" in {
-      SecurityHeaderCheck.check(
-        snap("https://x.test/", Map.empty, status = 0),
-      ) shouldBe empty
+      SecurityHeaderCheck
+        .check(snap("https://x.test/", Map.empty, status = 0)) shouldBe empty
     }
 
     "report nothing when all security headers are present" in {
@@ -70,8 +69,8 @@ class SecurityHeaderCheckSpec extends AnyWordSpec with Matchers {
       val fs = SecurityHeaderCheck.check(snap("https://x.test/", Map.empty))
       fs.find(_.replay.contains("content-security-policy"))
         .map(_.severity) shouldBe Some(Severity.Medium)
-      fs.find(_.replay.contains("referrer-policy"))
-        .map(_.severity) shouldBe Some(Severity.Low)
+      fs.find(_.replay.contains("referrer-policy")).map(_.severity) shouldBe
+        Some(Severity.Low)
     }
   }
 }

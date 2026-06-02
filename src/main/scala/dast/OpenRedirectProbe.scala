@@ -19,8 +19,8 @@ import org.slf4j.LoggerFactory
   *
   * This is the first of the HTTP-level probers; it runs only under an
   * authorized active scope (the orchestrator gates it) and identifies itself
-  * with the scanner User-Agent (CLAUDE.md section 5). The HTTP call is exercised
-  * only live; the build / confirm logic it composes is unit tested in
+  * with the scanner User-Agent (CLAUDE.md section 5). The HTTP call is
+  * exercised only live; the build / confirm logic it composes is unit tested in
   * [[OpenRedirectCheck]].
   */
 object OpenRedirectProbe:
@@ -47,8 +47,8 @@ object OpenRedirectProbe:
   ): Future[Option[Finding]] =
     val point = InjectionPoint.QueryParam(name)
     // Try payloads in order; stop at the first that confirms.
-    OpenRedirectCheck.payloads.foldLeft(Future.successful(Option.empty[Finding])) {
-      (acc, payload) =>
+    OpenRedirectCheck.payloads
+      .foldLeft(Future.successful(Option.empty[Finding])) { (acc, payload) =>
         acc.flatMap {
           case some @ Some(_) => Future.successful(some)
           case None => locationOf(point.placeInto(target, payload)).map {
@@ -57,7 +57,7 @@ object OpenRedirectProbe:
               case _ => None
             }
         }
-    }
+      }
 
   /** The `Location` of a redirect response, if any; None for non-3xx, no
     * Location, or any request failure.

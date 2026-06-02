@@ -62,8 +62,8 @@ object SecurityHeaderCheck:
 
       out.result()
 
-  private def isHttps(url: String): Boolean =
-    url.toLowerCase.startsWith("https://")
+  private def isHttps(url: String): Boolean = url.toLowerCase
+    .startsWith("https://")
 
   private def finding(
       url: String,
