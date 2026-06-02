@@ -14,7 +14,8 @@ class IdorPlanSpec extends AnyWordSpec with Matchers {
 
   "IdorPlan.jsonFieldNames" should {
     "list top-level object keys" in {
-      IdorPlan.jsonFieldNames("""{"id":"1","email":"a@x","balance":9}""") shouldBe
+      IdorPlan
+        .jsonFieldNames("""{"id":"1","email":"a@x","balance":9}""") shouldBe
         Seq("id", "email", "balance")
     }
     "use the first element's keys for an array" in {
@@ -40,7 +41,8 @@ class IdorPlanSpec extends AnyWordSpec with Matchers {
 
   "IdorPlan.confirms" should {
     "confirm a 2xx whose field differs from the caller's own value" in {
-      IdorPlan.confirms("alice@x", 200, """{"email":"bob@x"}""", "email") shouldBe
+      IdorPlan
+        .confirms("alice@x", 200, """{"email":"bob@x"}""", "email") shouldBe
         true
     }
     "not confirm when the field matches the caller's own value" in {
@@ -49,7 +51,8 @@ class IdorPlanSpec extends AnyWordSpec with Matchers {
         false
     }
     "not confirm on 403 even if the field differs" in {
-      IdorPlan.confirms("alice@x", 403, """{"email":"bob@x"}""", "email") shouldBe
+      IdorPlan
+        .confirms("alice@x", 403, """{"email":"bob@x"}""", "email") shouldBe
         false
     }
     "not confirm when the field is absent" in {
@@ -59,11 +62,13 @@ class IdorPlanSpec extends AnyWordSpec with Matchers {
 
   "IdorPlan.parseProposals" should {
     "validate proposals and drop incomplete ones" in {
-      val arr = ujson.read("""[
+      val arr = ujson.read(
+        """[
         {"param":"id","ownValue":"1001","candidates":["1002","1003"],"discriminatorField":"email"},
         {"param":"id","ownValue":"1","candidates":[],"discriminatorField":"email"},
         {"param":"id","ownValue":"1","candidates":["2"]}
-      ]""")
+      ]""",
+      )
       val ps = IdorPlan.parseProposals(arr)
       ps should have size 1
       ps.head.param shouldBe "id"

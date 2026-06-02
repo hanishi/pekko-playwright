@@ -12,14 +12,15 @@ import org.slf4j.LoggerFactory
 import dast.IdorPlan.Observation
 import dast.IdorPlan.Proposal
 
-/** Browser-free IDOR probe: observe an authenticated page, let a planner propose
-  * tests, then confirm each deterministically.
+/** Browser-free IDOR probe: observe an authenticated page, let a planner
+  * propose tests, then confirm each deterministically.
   *
   * The planner is injected (so the loop is testable without the model). The
   * confirmation is pure [[IdorPlan]] logic: baseline the caller's own value,
   * then for each neighbour value check whether the discriminator field comes
-  * back present and different (cross-user data). Gated by [[ConsentGate]] on the
-  * page host. Identifies itself with the scanner User-Agent. HTTP is live-only.
+  * back present and different (cross-user data). Gated by [[ConsentGate]] on
+  * the page host. Identifies itself with the scanner User-Agent. HTTP is
+  * live-only.
   */
 object IdorProbe:
 
@@ -34,7 +35,10 @@ object IdorProbe:
       cookie: Option[String],
       auth: Authorization,
       planner: Observation => Future[Seq[Proposal]],
-  )(using system: ActorSystem[?], ec: ExecutionContext): Future[Vector[Finding]] =
+  )(using
+      system: ActorSystem[?],
+      ec: ExecutionContext,
+  ): Future[Vector[Finding]] =
     ConsentGate.decide(auth, ActionClass.Active, url) match
       case GateDecision.Deny(reason) =>
         log.info("IDOR scan of {} skipped: {}", url, reason)
@@ -75,16 +79,24 @@ object IdorProbe:
       point: InjectionPoint,
       p: Proposal,
       ownValue: String,
-  )(using ActorSystem[?], ExecutionContext): Future[Option[Finding]] = p.candidates
+  )(using ActorSystem[?], ExecutionContext): Future[Option[Finding]] = p
+    .candidates
     .foldLeft(Future.successful(Option.empty[Finding])) { (acc, candidate) =>
       acc.flatMap {
         case some @ Some(_) => Future.successful(some)
         case None => fetch(point.placeInto(url, candidate), cookie).map {
             case Some((cs, cbody))
-                if IdorPlan.confirms(ownValue, cs, cbody, p.discriminatorField) =>
+                if IdorPlan
+                  .confirms(ownValue, cs, cbody, p.discriminatorField) =>
               val leaked = IdorPlan.extractField(cbody, p.discriminatorField)
                 .getOrElse("")
-              Some(IdorPlan.toFinding(url, p.param, candidate, p.discriminatorField, leaked))
+              Some(IdorPlan.toFinding(
+                url,
+                p.param,
+                candidate,
+                p.discriminatorField,
+                leaked,
+              ))
             case _ => None
           }
       }

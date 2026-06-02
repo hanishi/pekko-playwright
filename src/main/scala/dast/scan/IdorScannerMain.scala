@@ -15,11 +15,12 @@ import dast.Finding
 
 /** Runnable LLM-planned IDOR scanner.
   *
-  * Takes a URL and an identity spec (the same JSON as [[AccessScannerMain]]; the
-  * first identity is used for the authenticated session). The model proposes
-  * IDOR tests from the observed page; deterministic code confirms by cross-value
-  * comparison. Active by nature, gated against `DAST_AUTHORIZED_HOSTS`. Needs
-  * `ANTHROPIC_API_KEY` for the planner (fails closed to no plan otherwise).
+  * Takes a URL and an identity spec (the same JSON as [[AccessScannerMain]];
+  * the first identity is used for the authenticated session). The model
+  * proposes IDOR tests from the observed page; deterministic code confirms by
+  * cross-value comparison. Active by nature, gated against
+  * `DAST_AUTHORIZED_HOSTS`. Needs `ANTHROPIC_API_KEY` for the planner (fails
+  * closed to no plan otherwise).
   *
   * Usage: sbt "runMain dast.scan.IdorScannerMain <url> <identity-spec.json>"
   */
@@ -51,10 +52,11 @@ object IdorScannerMain:
     finally src.close()
   }.toEither.left.map(e => s"cannot read spec '$path': ${e.getMessage}")
     .flatMap(AccessControlCheck.parseSpec(_).left.map(e => s"invalid spec: $e"))
-    .flatMap(_.identities.values.headOption
-      .toRight("spec has no identities"))
+    .flatMap(_.identities.values.headOption.toRight("spec has no identities"))
 
   private def navTimeoutMs: Int = DastConfig.getInt("DAST_NAV_TIMEOUT_MS", 30000)
+  private def maxDepth: Int = DastConfig.getInt("DAST_MAX_DEPTH", 2)
+  private def maxPages: Int = DastConfig.getInt("DAST_MAX_PAGES", 20)
 
   private def authorization: Authorization = DastConfig
     .get("DAST_AUTHORIZED_HOSTS") match
@@ -71,12 +73,16 @@ object IdorScannerMain:
     given ActorSystem[?] = ctx.system
 
     ctx.log.info(
-      "IDOR scan of {} (active scope: {})",
+      "IDOR scan from {} (active scope: {}, maxPages={}, maxDepth={})",
       url,
       if auth.allowActive then auth.authorizedHosts.mkString(",")
       else "observe-only (skipped)",
+      maxPages,
+      maxDepth,
     )
-    ctx.pipeToSelf(Scanner.runIdor(ctx, url, identity, auth, navTimeoutMs)) {
+    ctx.pipeToSelf(
+      Scanner.runIdor(ctx, url, identity, auth, navTimeoutMs, maxDepth, maxPages),
+    ) {
       case scala.util.Success(fs) => fs
       case scala.util.Failure(_) => Vector.empty
     }

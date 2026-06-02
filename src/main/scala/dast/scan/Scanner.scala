@@ -23,12 +23,14 @@ import dast.AccessControlCheck.AccessSpec
 import dast.AccessControlCheck.Identity
 import dast.AccessControlProbe
 import dast.ActionClass
+import dast.AuthCrawl
 import dast.Authorization
 import dast.CaptureOp
 import dast.ConsentGate
 import dast.DastConfig
 import dast.Finding
 import dast.GateDecision
+import dast.IdorPlan
 import dast.IdorProbe
 import dast.LoginOp
 import dast.Oast
@@ -120,19 +122,36 @@ object Scanner:
       else resolveLogins(buildPool(ctx, 1, navTimeoutMs), spec, auth)
     resolved.flatMap(s => AccessControlProbe.scan(s, auth))
 
-  /** Run an LLM-planned IDOR scan of one authenticated URL: resolve the
-    * identity's session (logging in if configured), observe the page, let the
-    * planner propose tests, and confirm each deterministically.
+  /** Run an LLM-planned IDOR scan from a seed: resolve the identity's session
+    * (logging in if configured), crawl same-host pages authenticated, and on
+    * each param-bearing page let the planner propose tests that deterministic
+    * code confirms. `maxPages`/`maxDepth` bound the crawl; param-less pages are
+    * crawled for links but not planned (no object reference, no LLM call).
     */
   def runIdor(
       ctx: ActorContext[?],
-      url: String,
+      seed: String,
       identity: Identity,
       auth: Authorization,
       navTimeoutMs: Int = 30000,
+      maxDepth: Int = 2,
+      maxPages: Int = 20,
   )(using ActorSystem[?], ExecutionContext): Future[Vector[Finding]] =
     resolveCookie(ctx, identity, auth, navTimeoutMs).flatMap { cookie =>
-      IdorProbe.scan(url, cookie, auth, obs => IdorPlanner.plan(obs))
+      AuthCrawl.discover(seed, cookie, maxDepth, maxPages).flatMap {
+        discovered =>
+          val targets = (seed +: discovered).distinct
+            .filter(u => IdorPlan.queryParams(u).nonEmpty)
+          org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
+            "IDOR crawl from {}: {} page(s) discovered, {} with parameters to plan",
+            seed,
+            discovered.size,
+            targets.size,
+          )
+          Future.sequence(
+            targets.map(u => IdorProbe.scan(u, cookie, auth, IdorPlanner.plan)),
+          ).map(_.flatten.toVector)
+      }
     }
 
   /** A single identity's session cookie: minted by login if configured (gated,

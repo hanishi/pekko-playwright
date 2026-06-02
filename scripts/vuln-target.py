@@ -52,6 +52,25 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        # Authenticated dashboard: session-gated, links to the user's account so
+        # an authenticated crawl can navigate from here to /account.
+        if parsed.path == "/dashboard":
+            if "session=" not in self.headers.get("Cookie", ""):
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = (
+                b"<html><body><h1>Dashboard</h1>"
+                b'<a href="/account?id=1001">My account</a></body></html>'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         # IDOR, on purpose: /account requires a session cookie but does NOT
         # check that the session owns `id`, so any logged-in user reads any id.
         if parsed.path == "/account":
