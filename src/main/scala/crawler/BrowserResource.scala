@@ -121,6 +121,32 @@ final class BrowserResource(
       catch { case _: Exception => () }
   }
 
+  /** Run a passive page operation on the pinned thread: open a page, navigate
+    * to `url`, hand the live `Page` to `op`, and close the page afterwards.
+    *
+    * This is the generic entry point for DAST page operations (capture today,
+    * probe/confirm later). Like [[scrape]] it must only be invoked via
+    * `pool.submit` so it stays on the browser's pinned thread. It does no
+    * request blocking and does not clear cookies, so `op` sees the page as a
+    * real visit leaves it. `op` must not retain the `Page` beyond the call.
+    */
+  def withPage[A](url: String)(op: Page => A): A = {
+    val page = context.newPage()
+    try {
+      val response = page.navigate(
+        url,
+        new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED)
+          .setTimeout(settings.navigationTimeoutMs),
+      )
+      Option(response)
+        .getOrElse(throw new RuntimeException(s"No response received for $url"))
+      page.waitForLoadState(LoadState.DOMCONTENTLOADED)
+      op(page)
+    } finally
+      try page.close()
+      catch { case _: Exception => () }
+  }
+
   private def newContext(): BrowserContext = {
     val opts = new Browser.NewContextOptions().setUserAgent(
       // Match a current real Chrome — bot managers flag stale majors.
