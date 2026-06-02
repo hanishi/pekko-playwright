@@ -47,3 +47,6 @@ build/
 .env.local
 .env
 .env.*
+
+# operator access-control specs (real captured sessions)
+*.local.json

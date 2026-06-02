@@ -37,6 +37,38 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        # IDOR, on purpose: /account requires a session cookie but does NOT
+        # check that the session owns `id`, so any logged-in user reads any id.
+        if parsed.path == "/account":
+            cookies = self.headers.get("Cookie", "")
+            if "session=" not in cookies:
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            ident = params.get("id", ["0"])[0]
+            body = (
+                f'{{"id":"{ident}","email":"user{ident}@example.com",'
+                f'"balance":{1000 + int(ident) if ident.isdigit() else 0}}}'
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        # Missing function-level auth, on purpose: /admin serves admin content
+        # to anyone, with no authentication check at all.
+        if parsed.path == "/admin":
+            body = b"<html><body><h1>admin panel</h1>all users listed here</body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         # SSRF, on purpose: the server fetches whatever `url` points at.
         if parsed.path == "/fetch":
             fetch_url = params.get("url", [""])[0]

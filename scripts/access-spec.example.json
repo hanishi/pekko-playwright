@@ -1,0 +1,20 @@
+{
+  "_comment": "Example access-control / IDOR spec for AccessScannerMain. Copy to a gitignored *.local.json, fill in REAL captured sessions (never commit them), and point the cases at endpoints you are authorized to test. Confirmed when a request as `identity` returns 2xx containing `mustContain` (data that should be restricted). identity: null = unauthenticated. These cases target the local scripts/vuln-target.py.",
+  "identities": {
+    "alice": { "cookie": "session=alice" }
+  },
+  "cases": [
+    {
+      "name": "IDOR: alice reads another account",
+      "url": "http://localhost:8123/account?id=1002",
+      "identity": "alice",
+      "mustContain": "user1002@example.com"
+    },
+    {
+      "name": "Missing auth: admin panel without a session",
+      "url": "http://localhost:8123/admin",
+      "identity": null,
+      "mustContain": "admin panel"
+    }
+  ]
+}
