@@ -9,4 +9,5 @@ package dast
 object Tier1:
 
   def run(snapshot: ClientStateSnapshot): Seq[Finding] = CookieFlagCheck
-    .check(snapshot) ++ SecretInStorageCheck.check(snapshot)
+    .check(snapshot) ++ SecretInStorageCheck.check(snapshot) ++
+    SecurityHeaderCheck.check(snapshot)

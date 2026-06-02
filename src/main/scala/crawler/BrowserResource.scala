@@ -128,9 +128,11 @@ final class BrowserResource(
     * probe/confirm later). Like [[scrape]] it must only be invoked via
     * `pool.submit` so it stays on the browser's pinned thread. It does no
     * request blocking and does not clear cookies, so `op` sees the page as a
-    * real visit leaves it. `op` must not retain the `Page` beyond the call.
+    * real visit leaves it. `op` receives the live `Page` and the main
+    * navigation `Response` (for response-header / status checks); it must not
+    * retain either beyond the call.
     */
-  def withPage[A](url: String)(op: Page => A): A = {
+  def withPage[A](url: String)(op: (Page, Response) => A): A = {
     val page = context.newPage()
     try {
       val response = page.navigate(
@@ -138,12 +140,12 @@ final class BrowserResource(
         new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD)
           .setTimeout(settings.navigationTimeoutMs),
       )
-      Option(response)
+      val resp = Option(response)
         .getOrElse(throw new RuntimeException(s"No response received for $url"))
       // Wait for full `load` (not just domcontentloaded) so cookies/storage set
       // during the page load are visible to a passive capture.
       page.waitForLoadState(LoadState.LOAD)
-      op(page)
+      op(page, resp)
     } finally
       try page.close()
       catch { case _: Exception => () }

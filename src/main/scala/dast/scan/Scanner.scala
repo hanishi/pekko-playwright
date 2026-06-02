@@ -138,9 +138,8 @@ object Scanner:
     val seedHost = Scope.hostOf(seed).getOrElse("")
 
     def linksOf(url: String): Future[Seq[String]] = pool
-      .submit(r => r.withPage(url)(page => hrefs(page))).recover { case _ =>
-        Seq.empty
-      }
+      .submit(r => r.withPage(url)((page, _) => hrefs(page)))
+      .recover { case _ => Seq.empty }
 
     def loop(
         frontier: List[String],

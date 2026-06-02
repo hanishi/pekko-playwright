@@ -24,6 +24,10 @@ final case class ClientStateSnapshot(
     localStorage: Map[String, String] = Map.empty,
     sessionStorage: Map[String, String] = Map.empty,
     cookies: Seq[Cookie] = Seq.empty,
+    // The main navigation response's headers (keys lowercased) and status code.
+    // `status == 0` means no response was captured, so header checks no-op.
+    responseHeaders: Map[String, String] = Map.empty,
+    status: Int = 0,
     // Whether a login / auth exchange was observed during capture. Used only to
     // raise the severity of a secret finding, never to create one.
     observedAuthFlow: Boolean = false,

@@ -44,14 +44,19 @@ object CaptureOp:
     * page); the parsing it delegates to is.
     */
   def capture(resource: BrowserResource, url: String): ClientStateSnapshot =
-    resource.withPage(url) { page =>
+    resource.withPage(url) { (page, response) =>
       val (local, session) = parseStorage(page.evaluate(CaptureJs))
       val cookies = page.context().cookies().asScala.map(toCookie).toSeq
+      // Response headers come back with lowercased keys from Playwright; keep
+      // them that way so header lookups are case-insensitive by construction.
+      val headers = response.headers().asScala.toMap
       ClientStateSnapshot(
         url = url,
         localStorage = local,
         sessionStorage = session,
         cookies = cookies,
+        responseHeaders = headers,
+        status = response.status(),
       )
     }
 
