@@ -33,9 +33,9 @@ object AccessControlProbe:
   def scan(spec: AccessSpec, auth: Authorization)(using
       system: ActorSystem[?],
       ec: ExecutionContext,
-  ): Future[Vector[Finding]] =
-    Future.sequence(spec.cases.map(c => probeCase(spec, c, auth)))
-      .map(_.flatten.toVector)
+  ): Future[Vector[Finding]] = Future
+    .sequence(spec.cases.map(c => probeCase(spec, c, auth)))
+    .map(_.flatten.toVector)
 
   private def probeCase(spec: AccessSpec, c: AccessCase, auth: Authorization)(
       using
@@ -59,14 +59,11 @@ object AccessControlProbe:
           case _ => None
         }
 
-  private def buildHeaders(
-      spec: AccessSpec,
-      c: AccessCase,
-  ): List[HttpHeader] =
+  private def buildHeaders(spec: AccessSpec, c: AccessCase): List[HttpHeader] =
     val ua = headers.RawHeader("User-Agent", UserAgent)
     val identity = c.identity.flatMap(spec.identities.get)
-    val cookie =
-      identity.flatMap(_.cookie).map(ck => headers.RawHeader("Cookie", ck)).toList
+    val cookie = identity.flatMap(_.cookie)
+      .map(ck => headers.RawHeader("Cookie", ck)).toList
     val extra = identity.map(_.headers).getOrElse(Map.empty)
       .map((k, v) => headers.RawHeader(k, v)).toList
     ua :: cookie ++ extra
@@ -75,8 +72,8 @@ object AccessControlProbe:
   private def fetch(request: HttpRequest)(using
       system: ActorSystem[?],
       ec: ExecutionContext,
-  ): Future[Option[(Int, String)]] =
-    Http()(system).singleRequest(request).flatMap { response =>
+  ): Future[Option[(Int, String)]] = Http()(system).singleRequest(request)
+    .flatMap { response =>
       Unmarshal(response.entity).to[String]
         .map(body => Some((response.status.intValue(), body)))
     }.recover { case t =>

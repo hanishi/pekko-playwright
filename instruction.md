@@ -187,6 +187,16 @@ as preconditions, not features:
 - **No destructive actions.** Never auto-submit forms, delete records, trigger
   emails/payments, or follow obviously state-changing actions during automated
   probing. When in doubt, capture and flag for human review instead of acting.
+  - **Authenticated-scan carve-out (the one exception).** The scanner may submit
+    *one* explicitly-configured login form to mint a session for an
+    authenticated scan, and only when all of these hold: the operator supplied
+    the credentials, the login URL is named in the scan spec, the host is in the
+    authorized scope, and login is the sole form submitted (no other discovered
+    form is ever submitted). The LLM may *identify* which fields are username /
+    password / submit (it supplies selectors, per §0.2) but never authors the
+    fill or submit; a deterministic op performs them. Login is bounded and
+    non-destructive (it reads, it does not mutate app data); everything else in
+    this bullet still holds. Be mindful it can trip lockout / MFA / CAPTCHA.
 - **Be identifiable, not evasive.** For sanctioned scanning the scanner should
   announce itself (identifiable user-agent, optional scan header) and respect
   rate limits. Do **not** route the DAST path through `stealth.js` by default;

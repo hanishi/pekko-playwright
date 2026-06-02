@@ -7,8 +7,8 @@ class AccessControlCheckSpec extends AnyWordSpec with Matchers {
 
   "AccessControlCheck.confirms" should {
     "hit on a 2xx body containing the discriminator" in {
-      AccessControlCheck.confirms(200, """{"email":"bob@x"}""", "bob@x") shouldBe
-        true
+      AccessControlCheck
+        .confirms(200, """{"email":"bob@x"}""", "bob@x") shouldBe true
     }
     "miss when the discriminator is absent" in {
       AccessControlCheck.confirms(200, "denied", "bob@x") shouldBe false
@@ -37,6 +37,25 @@ class AccessControlCheckSpec extends AnyWordSpec with Matchers {
       spec.cases.map(_.name) shouldBe Seq("idor", "forced")
       spec.cases(0).identity shouldBe Some("alice")
       spec.cases(1).identity shouldBe None
+    }
+
+    "parse an identity that logs in instead of carrying a cookie" in {
+      val json =
+        """{
+          |  "identities": {
+          |    "alice": { "login": {
+          |      "loginUrl": "http://h/login", "username": "alice", "password": "pw"
+          |    } }
+          |  },
+          |  "cases": [
+          |    { "name": "c", "url": "http://h/a?id=2", "identity": "alice", "mustContain": "x" }
+          |  ]
+          |}""".stripMargin
+      val spec = AccessControlCheck.parseSpec(json).toOption.get
+      val alice = spec.identities("alice")
+      alice.cookie shouldBe None
+      alice.login.map(_.loginUrl) shouldBe Some("http://h/login")
+      alice.login.map(_.username) shouldBe Some("alice")
     }
 
     "reject a case referencing an unknown identity" in {

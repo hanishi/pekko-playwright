@@ -37,6 +37,21 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        # Login form: GET renders it; POST (below) sets the session cookie.
+        if parsed.path == "/login":
+            body = (
+                b"<html><body><form method=POST action=/login>"
+                b"<input type=text name=username placeholder=user>"
+                b"<input type=password name=password placeholder=pass>"
+                b"<button type=submit>Log in</button></form></body></html>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         # IDOR, on purpose: /account requires a session cookie but does NOT
         # check that the session owns `id`, so any logged-in user reads any id.
         if parsed.path == "/account":
@@ -128,6 +143,29 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/login":
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            form = parse_qs(self.rfile.read(length).decode("utf-8"))
+            user = form.get("username", [""])[0]
+            pw = form.get("password", [""])[0]
+            # Accept any username with the shared demo password.
+            if user and pw == "secret":
+                self.send_response(302)
+                self.send_header("Set-Cookie", f"session={user}; Path=/")
+                self.send_header("Location", "/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            return
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def log_message(self, *args):  # quiet
         pass

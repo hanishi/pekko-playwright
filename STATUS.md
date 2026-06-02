@@ -78,10 +78,15 @@ Run: `sbt 'runMain dast.scan.ScannerMain <url>'` (single URL),
 `dast.scan.AccessScannerMain <spec.json>` (assisted access-control / IDOR).
 
 Access control is the one **assisted** check: it is operator-driven, not
-"point at a URL and go". You describe identities (captured sessions) and
-assertion cases (URL + identity + a discriminator) in a JSON spec; the tool
-automates the swap-and-diff matrix and confirms by the oracle. Real specs hold
-captured sessions, so keep them in a gitignored `*.local.json`.
+"point at a URL and go". You describe identities and assertion cases (URL +
+identity + a discriminator) in a JSON spec; the tool automates the
+swap-and-diff matrix and confirms by the oracle. An identity is either a
+pre-captured `cookie`/`headers`, or a `login` block (loginUrl + username +
+password) — in which case the scanner submits that one login form to mint the
+session (instruction.md §5 authenticated-scan carve-out: operator credentials,
+gated host, login the sole form submitted; login fields are detected
+deterministically). Real specs hold credentials/sessions, so keep them in a
+gitignored `*.local.json`.
 
 ## Out of scope (named, not hidden)
 

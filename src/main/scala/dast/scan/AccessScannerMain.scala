@@ -9,7 +9,6 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 
 import dast.AccessControlCheck
 import dast.AccessControlCheck.AccessSpec
-import dast.AccessControlProbe
 import dast.Authorization
 import dast.DastConfig
 import dast.Finding
@@ -17,31 +16,33 @@ import dast.Finding
 /** Runnable, spec-driven access-control / IDOR scanner.
   *
   * Reads a JSON spec (path arg, or `DAST_ACCESS_SPEC`) describing captured
-  * identities and assertion cases, then runs [[AccessControlProbe]] and prints a
-  * findings report. Active by nature, so every case is gated against
-  * `DAST_AUTHORIZED_HOSTS`; with none set, all cases are skipped (observe-only).
-  * Wiring around tested components; exercised only by a live run.
+  * identities and assertion cases, then runs [[AccessControlProbe]] and prints
+  * a findings report. Active by nature, so every case is gated against
+  * `DAST_AUTHORIZED_HOSTS`; with none set, all cases are skipped
+  * (observe-only). Wiring around tested components; exercised only by a live
+  * run.
   *
   * Usage: sbt "runMain dast.scan.AccessScannerMain access-spec.json"
   */
 object AccessScannerMain:
 
-  def main(args: Array[String]): Unit =
-    args.headOption.filter(_.nonEmpty).orElse(DastConfig.get("DAST_ACCESS_SPEC"))
-    match
-      case None =>
-        Console.err.println("usage: AccessScannerMain <spec.json>")
-        sys.exit(2)
-      case Some(path) => readFile(path) match
-          case Left(err) =>
-            Console.err.println(s"cannot read spec '$path': $err")
-            sys.exit(2)
-          case Right(content) => AccessControlCheck.parseSpec(content) match
-              case Left(err) =>
-                Console.err.println(s"invalid spec: $err")
-                sys.exit(2)
-              case Right(spec) =>
-                ActorSystem(guardian(spec, authorization), "dast-access-scanner")
+  def main(args: Array[String]): Unit = args.headOption.filter(_.nonEmpty)
+    .orElse(DastConfig.get("DAST_ACCESS_SPEC")) match
+    case None =>
+      Console.err.println("usage: AccessScannerMain <spec.json>")
+      sys.exit(2)
+    case Some(path) => readFile(path) match
+        case Left(err) =>
+          Console.err.println(s"cannot read spec '$path': $err")
+          sys.exit(2)
+        case Right(content) => AccessControlCheck.parseSpec(content) match
+            case Left(err) =>
+              Console.err.println(s"invalid spec: $err")
+              sys.exit(2)
+            case Right(spec) =>
+              ActorSystem(guardian(spec, authorization), "dast-access-scanner")
+
+  private def navTimeoutMs: Int = DastConfig.getInt("DAST_NAV_TIMEOUT_MS", 30000)
 
   private def authorization: Authorization = DastConfig
     .get("DAST_AUTHORIZED_HOSTS") match
@@ -62,13 +63,15 @@ object AccessScannerMain:
     given ExecutionContext = ctx.executionContext
     given ActorSystem[?] = ctx.system
 
+    val logins = spec.identities.values.count(_.login.isDefined)
     ctx.log.info(
-      "Access-control scan: {} case(s), active scope: {}",
+      "Access-control scan: {} case(s), {} login(s), active scope: {}",
       spec.cases.size,
+      logins,
       if auth.allowActive then auth.authorizedHosts.mkString(",")
       else "observe-only (all cases skipped)",
     )
-    ctx.pipeToSelf(AccessControlProbe.scan(spec, auth)) {
+    ctx.pipeToSelf(Scanner.runAccess(ctx, spec, auth, navTimeoutMs)) {
       case scala.util.Success(fs) => fs
       case scala.util.Failure(_) => Vector.empty
     }

@@ -22,10 +22,21 @@ import scala.util.Try
   */
 object AccessControlCheck:
 
-  /** A captured caller identity. `cookie` is a raw Cookie header value; extra
-    * headers carry bearer tokens etc. Absent identity = unauthenticated.
+  /** An operator-configured login: the scanner submits this one form (per the
+    * §5 authenticated-scan carve-out) to mint a session. Credentials are
+    * operator-supplied; fields are detected deterministically.
     */
-  final case class Identity(cookie: Option[String], headers: Map[String, String])
+  final case class Login(loginUrl: String, username: String, password: String)
+
+  /** A caller identity. Either a pre-captured `cookie` (raw Cookie header
+    * value) / `headers` (bearer tokens etc.), or a `login` the scanner performs
+    * to obtain the cookie. Absent identity = unauthenticated.
+    */
+  final case class Identity(
+      cookie: Option[String],
+      headers: Map[String, String],
+      login: Option[Login] = None,
+  )
 
   /** One access-control assertion: requesting `url` as `identity` (None =
     * unauthenticated) must NOT return `mustContain` -- if it does, access that
@@ -43,8 +54,8 @@ object AccessControlCheck:
       cases: Seq[AccessCase],
   )
 
-  /** Confirmed when the response succeeded (2xx) and leaked the discriminator. A
-    * 3xx (e.g. redirect to login) or 401/403 is correctly NOT a hit.
+  /** Confirmed when the response succeeded (2xx) and leaked the discriminator.
+    * A 3xx (e.g. redirect to login) or 401/403 is correctly NOT a hit.
     */
   def confirms(status: Int, body: String, mustContain: String): Boolean =
     status >= 200 && status <= 299 && body.contains(mustContain)
@@ -54,14 +65,14 @@ object AccessControlCheck:
     Finding(
       kind = FindingKind.BrokenAccessControl,
       severity = Severity.High,
-      evidence =
-        s"'${c.name}': request to ${c.url} as $who returned data that should be restricted",
+      evidence = s"'${c.name}': request to ${c
+          .url} as $who returned data that should be restricted",
       reproducible = true,
       replay = s"access case='${c.name}' as=$who url=${c.url}",
     )
 
-  /** Parse a JSON spec. `Left` carries a human message on any malformed input or
-    * a case referencing an unknown identity.
+  /** Parse a JSON spec. `Left` carries a human message on any malformed input
+    * or a case referencing an unknown identity.
     */
   def parseSpec(jsonStr: String): Either[String, AccessSpec] = Try {
     val j = ujson.read(jsonStr)
@@ -70,6 +81,9 @@ object AccessControlCheck:
         cookie = v.obj.get("cookie").map(_.str),
         headers = v.obj.get("headers")
           .map(_.obj.map((k, hv) => k -> hv.str).toMap).getOrElse(Map.empty),
+        login = v.obj.get("login").map { l =>
+          Login(l("loginUrl").str, l("username").str, l("password").str)
+        },
       )
     }.toMap
     val cases = j("cases").arr.map { c =>
@@ -82,7 +96,10 @@ object AccessControlCheck:
       )
     }.toSeq
     cases.flatMap(_.identity).foreach { ref =>
-      require(identities.contains(ref), s"case references unknown identity '$ref'")
+      require(
+        identities.contains(ref),
+        s"case references unknown identity '$ref'",
+      )
     }
     AccessSpec(identities, cases)
   }.toEither.left.map(e => Option(e.getMessage).getOrElse(e.toString))

@@ -19,9 +19,16 @@ import crawler.pool.ResourcePool
 import crawler.pool.ResourcePool.Pool
 import crawler.pool.ResourcePool.asPool
 import crawler.pool.ResourcePool.submit
+import dast.AccessControlCheck.AccessSpec
+import dast.AccessControlProbe
+import dast.ActionClass
 import dast.Authorization
 import dast.CaptureOp
+import dast.ConsentGate
 import dast.DastConfig
+import dast.Finding
+import dast.GateDecision
+import dast.LoginOp
 import dast.Oast
 import dast.OastListener
 import dast.OpenRedirectProbe
@@ -92,6 +99,54 @@ object Scanner:
           .map(_.findings),
     )
     ctx.spawn(SiteScanOrchestrator(effects, maxPages), "dast-site-orchestrator")
+
+  /** Run a spec-driven access-control / IDOR scan. Identities configured with a
+    * `login` get a browser-minted session first (gated, §5 carve-out); the
+    * browser pool is only built when some identity needs to log in -- a
+    * cookie-only spec stays browser-free.
+    */
+  def runAccess(
+      ctx: ActorContext[?],
+      spec: AccessSpec,
+      auth: Authorization,
+      navTimeoutMs: Int = 30000,
+  )(using ActorSystem[?], ExecutionContext): Future[Vector[Finding]] =
+    val needsLogin = spec.identities.values.exists(_.login.isDefined)
+    val resolved =
+      if !needsLogin then Future.successful(spec)
+      else resolveLogins(buildPool(ctx, 1, navTimeoutMs), spec, auth)
+    resolved.flatMap(s => AccessControlProbe.scan(s, auth))
+
+  /** Replace each login-configured identity's cookie with one minted by
+    * actually logging in (on the pinned thread, gated by host). A failed or
+    * denied login leaves the identity unchanged (its cases simply will not
+    * confirm).
+    */
+  private def resolveLogins(
+      pool: Pool[BrowserResource],
+      spec: AccessSpec,
+      auth: Authorization,
+  )(using ExecutionContext): Future[AccessSpec] =
+    val resolved = spec.identities.toSeq.map { (name, identity) =>
+      identity.login match
+        case None => Future.successful(name -> identity)
+        case Some(login) =>
+          ConsentGate.decide(auth, ActionClass.Active, login.loginUrl) match
+            case GateDecision.Deny(reason) =>
+              ctx_log_skip(name, reason)
+              Future.successful(name -> identity)
+            case GateDecision.Permit => pool.submit(r =>
+                LoginOp.login(r, login.loginUrl, login.username, login.password),
+              ).map {
+                case Right(cookie) => name -> identity.copy(cookie = Some(cookie))
+                case Left(_) => name -> identity
+              }
+    }
+    Future.sequence(resolved).map(pairs => spec.copy(identities = pairs.toMap))
+
+  private def ctx_log_skip(name: String, reason: String): Unit = org.slf4j
+    .LoggerFactory.getLogger("dast.scan.Scanner")
+    .info("Login for identity '{}' skipped: {}", name, reason)
 
   private def buildPool(
       ctx: ActorContext[?],
