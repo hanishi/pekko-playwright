@@ -21,6 +21,7 @@ import crawler.pool.ResourcePool.asPool
 import crawler.pool.ResourcePool.submit
 import dast.Authorization
 import dast.CaptureOp
+import dast.OpenRedirectProbe
 import dast.ProbeOp
 import dast.SinkScanOp
 import dast.analyzer.ClaudeAnalyzer
@@ -124,6 +125,9 @@ object Scanner:
       sinkScan = (baseUrl, source, marker) =>
         pool
           .submit(r => SinkScanOp.scan(r, baseUrl, source, marker, navTimeoutMs)),
+      // HTTP-level, off the browser pool entirely (CLAUDE.md: the browser is
+      // only for execution-confirmed XSS; redirects are an HTTP concern).
+      redirectScan = baseUrl => OpenRedirectProbe.scan(baseUrl),
     )
 
   /** Read-only, same-host BFS over the pool collecting anchor hrefs to

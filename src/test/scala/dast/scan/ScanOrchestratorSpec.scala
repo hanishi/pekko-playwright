@@ -44,11 +44,14 @@ class ScanOrchestratorSpec
       probe: (String, InjectionPoint, String, String) => Future[Option[Finding]],
       sinkScan: (String, InjectionPoint, String) => Future[Set[String]] =
         (_, _, _) => Future.successful(Set.empty),
+      redirectScan: String => Future[Vector[Finding]] =
+        _ => Future.successful(Vector.empty),
   ): Effects = Effects(
     capture = _ => Future.successful(snapshot),
     analyze = analyze,
     probe = probe,
     sinkScan = sinkScan,
+    redirectScan = redirectScan,
   )
 
   private type AnalyzerCtxF =
@@ -139,6 +142,48 @@ class ScanOrchestratorSpec
       reply.expectMessageType[ScanComplete].findings shouldBe
         (tier1 :+ probeFinding)
       probeCalls.get() shouldBe 1
+    }
+
+    "merge open-redirect findings under active auth" in {
+      val redirectFinding = Finding(
+        FindingKind.OpenRedirect,
+        Severity.Medium,
+        "query param 'next' controls a redirect",
+        reproducible = true,
+        "redirect query param 'next'",
+      )
+      val orch = spawn(ScanOrchestrator(
+        Authorization.active("example.com"),
+        effects(
+          analyze = _ => Future.successful(Done), // no reflected probing
+          probe = (_, _, _, _) => Future.successful(None),
+          redirectScan = _ => Future.successful(Vector(redirectFinding)),
+        ),
+      ))
+      val reply = createTestProbe[ScanComplete]()
+
+      orch ! Start(target, reply.ref)
+      reply.expectMessageType[ScanComplete].findings shouldBe
+        (tier1 :+ redirectFinding)
+    }
+
+    "not run the open-redirect probe under observe-only auth" in {
+      val redirectCalls = new AtomicInteger(0)
+      val orch = spawn(ScanOrchestrator(
+        Authorization.ObserveOnly,
+        effects(
+          analyze = _ => Future.successful(Done),
+          probe = (_, _, _, _) => Future.successful(None),
+          redirectScan = _ => {
+            redirectCalls.incrementAndGet(); Future.successful(Vector.empty)
+          },
+        ),
+      ))
+      val reply = createTestProbe[ScanComplete]()
+
+      orch ! Start(target, reply.ref)
+      reply.expectMessageType[ScanComplete].findings shouldBe tier1
+      redirectCalls.get() shouldBe 0
     }
 
     "run a DOM sink-scan under active auth and report reached sinks" in {

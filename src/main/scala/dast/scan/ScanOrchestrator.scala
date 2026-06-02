@@ -16,6 +16,7 @@ import dast.Authorization
 import dast.ClientStateSnapshot
 import dast.ConsentGate
 import dast.Finding
+import dast.FindingKind
 import dast.GateDecision
 import dast.InjectionPoint
 import dast.LlmDecision
@@ -58,6 +59,9 @@ object ScanOrchestrator:
       analyze: AnalyzerContext => Future[LlmDecision],
       probe: (String, InjectionPoint, String, String) => Future[Option[Finding]],
       sinkScan: (String, InjectionPoint, String) => Future[Set[String]],
+      // Deterministic HTTP open-redirect probe over the URL's query params.
+      redirectScan: String => Future[Vector[Finding]] =
+        _ => Future.successful(Vector.empty),
   )
 
   private final case class SnapshotReady(snapshot: ClientStateSnapshot)
@@ -66,6 +70,10 @@ object ScanOrchestrator:
   private final case class SinkScanReady(
       snapshot: ClientStateSnapshot,
       sinks: Set[String],
+  ) extends Command
+  private final case class RedirectScanReady(
+      snapshot: ClientStateSnapshot,
+      findings: Vector[Finding],
   ) extends Command
   private final case class DecisionReady(decision: LlmDecision) extends Command
   private final case class ProbeResult(finding: Option[Finding]) extends Command
@@ -153,7 +161,23 @@ private class ScanOrchestrator(
   private def awaitingSinkScan(tier1: Vector[Finding]): Behavior[Command] =
     Behaviors.receiveMessagePartial { case SinkScanReady(snapshot, sinks) =>
       val dom = SinkScanOp.toFindings(InjectionPoint.Fragment, sinks).toVector
-      step(snapshot, tier1 ++ dom, maxSteps, Set.empty)
+      // Deterministic open-redirect probe before the model loop.
+      ctx.pipeToSelf(effects.redirectScan(target)) {
+        case Success(fs) => RedirectScanReady(snapshot, tier1 ++ dom ++ fs)
+        case Failure(_) => RedirectScanReady(snapshot, tier1 ++ dom)
+      }
+      awaitingRedirectScan
+    }
+
+  private def awaitingRedirectScan: Behavior[Command] = Behaviors
+    .receiveMessagePartial { case RedirectScanReady(snapshot, findings) =>
+      if findings.exists(_.kind == FindingKind.OpenRedirect) then
+        ctx.log.info(
+          "Open-redirect probe found {} issue(s) on {}",
+          findings.count(_.kind == FindingKind.OpenRedirect),
+          target,
+        )
+      step(snapshot, findings, maxSteps, Set.empty)
     }
 
   private def step(

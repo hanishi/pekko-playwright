@@ -21,7 +21,20 @@ PORT = 8123
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        q = parse_qs(urlparse(self.path).query).get("q", [""])[0]
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        # Open redirect, on purpose: `next` is used as the Location verbatim,
+        # with no allow-list, so an off-origin value redirects off-site.
+        if parsed.path == "/redirect":
+            target = params.get("next", ["/"])[0]
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        q = params.get("q", [""])[0]
         # Vulnerable on purpose: `q` is interpolated into HTML with no escaping.
         html = (
             "<!doctype html><html><head><title>vuln target</title></head>"
