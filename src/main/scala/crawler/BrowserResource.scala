@@ -147,6 +147,20 @@ final class BrowserResource(
       catch { case _: Exception => () }
   }
 
+  /** Run an op on a fresh page on the pinned thread WITHOUT navigating first.
+    * Unlike [[withPage]], the op owns the full page lifecycle (e.g. install an
+    * init script, then navigate), which DAST probe ops need so a confirm hook
+    * is in place before the target loads. Same pinned-thread, pool-submit-only
+    * contract; the page is closed on the way out. `op` must not retain it.
+    */
+  def withFreshPage[A](op: Page => A): A = {
+    val page = context.newPage()
+    try op(page)
+    finally
+      try page.close()
+      catch { case _: Exception => () }
+  }
+
   private def newContext(): BrowserContext = {
     val opts = new Browser.NewContextOptions().setUserAgent(
       // Match a current real Chrome — bot managers flag stale majors.

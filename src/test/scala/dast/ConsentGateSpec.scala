@@ -26,23 +26,38 @@ class ConsentGateSpec extends AnyWordSpec with Matchers {
     }
 
     "permit an active action against an authorized host" in {
-      ConsentGate.decide(authed, ActionClass.Active, "https://example.com/login") shouldBe
-        GateDecision.Permit
+      ConsentGate
+        .decide(
+          authed,
+          ActionClass.Active,
+          "https://example.com/login",
+        ) shouldBe GateDecision.Permit
     }
 
     "match the authorized host case-insensitively" in {
-      ConsentGate.decide(authed, ActionClass.Active, "HTTPS://Example.COM/login") shouldBe
-        GateDecision.Permit
+      ConsentGate
+        .decide(
+          authed,
+          ActionClass.Active,
+          "HTTPS://Example.COM/login",
+        ) shouldBe GateDecision.Permit
     }
 
     "deny an active action against a host not in scope" in {
-      ConsentGate.decide(authed, ActionClass.Active, "https://evil.test/x") shouldBe
+      ConsentGate
+        .decide(authed, ActionClass.Active, "https://evil.test/x") shouldBe
         GateDecision.Deny("host 'evil.test' is not in the authorized scope")
     }
 
     "not auto-authorize subdomains of an authorized host" in {
-      ConsentGate.decide(authed, ActionClass.Active, "https://api.example.com/x") shouldBe
-        GateDecision.Deny("host 'api.example.com' is not in the authorized scope")
+      ConsentGate
+        .decide(
+          authed,
+          ActionClass.Active,
+          "https://api.example.com/x",
+        ) shouldBe
+        GateDecision
+          .Deny("host 'api.example.com' is not in the authorized scope")
     }
 
     "deny when the host cannot be determined" in {
@@ -54,12 +69,14 @@ class ConsentGateSpec extends AnyWordSpec with Matchers {
   "ConsentGate.classOf" should {
 
     "classify only Probe as active" in {
-      ConsentGate.classOf(LlmDecision.Probe("p", "img-onerror")) shouldBe ActionClass.Active
+      ConsentGate.classOf(LlmDecision.Probe("p", "img-onerror")) shouldBe
+        ActionClass.Active
       ConsentGate.classOf(LlmDecision.Done) shouldBe ActionClass.Passive
-      ConsentGate.classOf(LlmDecision.Navigate(NavIntent.Reload)) shouldBe ActionClass.Passive
-      ConsentGate.classOf(
-        LlmDecision.Classify("k", Sensitivity.Unknown),
-      ) shouldBe ActionClass.Passive
+      ConsentGate.classOf(LlmDecision.Navigate(NavIntent.Reload)) shouldBe
+        ActionClass.Passive
+      ConsentGate
+        .classOf(LlmDecision.Classify("k", Sensitivity.Unknown)) shouldBe
+        ActionClass.Passive
     }
   }
 }

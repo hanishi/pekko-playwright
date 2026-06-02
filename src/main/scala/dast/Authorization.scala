@@ -21,5 +21,7 @@ object Authorization:
   val ObserveOnly: Authorization = Authorization(Set.empty, allowActive = false)
 
   /** Authorize active testing for the given exact hosts. */
-  def active(hosts: String*): Authorization =
-    Authorization(hosts.iterator.map(_.trim.toLowerCase).filter(_.nonEmpty).toSet, allowActive = true)
+  def active(hosts: String*): Authorization = Authorization(
+    hosts.iterator.map(_.trim.toLowerCase).filter(_.nonEmpty).toSet,
+    allowActive = true,
+  )

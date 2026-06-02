@@ -6,7 +6,7 @@ enum Severity:
 
 /** The category of a finding. Extended as checks are added. */
 enum FindingKind:
-  case InsecureCookie, SecretInStorage
+  case InsecureCookie, SecretInStorage, Xss
 
 /** A reported issue.
   *
