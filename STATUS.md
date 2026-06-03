@@ -108,12 +108,17 @@ gitignored `*.local.json`.
 - **Where the LLM earns its place: LLM-planned, LLM-navigated IDOR**
   (`IdorScannerMain`). From a seed it logs in, then:
   - **crawls** same-host links (`AuthCrawl`, deterministic) for breadth, and
-  - **navigates** by form: on each page the model (`NavPlanner`) chooses
-    search/filter forms to submit to reach object listings a link crawl cannot.
-    Every submission passes `ActionGuard` -- GET always; POST only with the
-    model's safe flag AND a destructive-pattern deny-list (the deterministic
-    floor; the model's verdict is necessary, never sufficient). §5
-    navigation-action carve-out.
+  - **navigates** multi-hop (`NavLoop`): a bounded recursive loop where the
+    model (`NavStepPlanner`) picks ONE step per hop -- follow a link or submit a
+    form -- to reach object listings a link crawl cannot, threading a
+    `CookieJar` so mid-flow session state carries across hops. Every submission
+    passes `ActionGuard` (GET always; POST only with the model's safe flag AND a
+    destructive-pattern deny-list -- the deterministic floor, the model's
+    verdict necessary but never sufficient). Terminates on a hop budget, a
+    cycle guard (a repeated action ends it), a dry counter, and a POST budget;
+    every action is logged. §5 navigation-action carve-out. The loop is plain
+    recursive Future (not an actor): sequential HTTP+LLM, no browser, so the
+    pinned-thread invariant does not apply.
   - then on each object-bearing URL the model (`IdorPlanner`) proposes the
     param / neighbour values / per-user field, and deterministic code confirms
     by cross-value comparison.

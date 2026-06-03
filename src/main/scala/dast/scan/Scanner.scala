@@ -27,13 +27,14 @@ import dast.AuthCrawl
 import dast.Authorization
 import dast.CaptureOp
 import dast.ConsentGate
+import dast.CookieJar
 import dast.DastConfig
 import dast.Finding
-import dast.FormNav
 import dast.GateDecision
 import dast.IdorPlan
 import dast.IdorProbe
 import dast.LoginOp
+import dast.NavLoop
 import dast.Oast
 import dast.OastListener
 import dast.OpenRedirectProbe
@@ -43,7 +44,7 @@ import dast.SqlInjectionProbe
 import dast.SsrfProbe
 import dast.analyzer.ClaudeAnalyzer
 import dast.analyzer.IdorPlanner
-import dast.analyzer.NavPlanner
+import dast.analyzer.NavStepPlanner
 
 /** Assembles the real, pool- and Claude-backed effects and spawns an
   * orchestrator. This is wiring, not logic: it runs only against a live target
@@ -138,17 +139,22 @@ object Scanner:
       navTimeoutMs: Int = 30000,
       maxDepth: Int = 2,
       maxPages: Int = 20,
+      maxHops: Int = 4,
+      postBudget: Int = 3,
   )(using ActorSystem[?], ExecutionContext): Future[Vector[Finding]] =
     resolveCookie(ctx, identity, auth, navTimeoutMs).flatMap { cookie =>
       AuthCrawl.discover(seed, cookie, maxDepth, maxPages).flatMap {
         discovered =>
           val pages = (seed +: discovered).distinct
-          // LLM-driven navigation: submit forms (search/filter) on crawled pages
-          // to reach object listings a link crawl cannot. Each submission is
-          // gated by ActionGuard; result URLs join the IDOR target set.
-          Future.sequence(
-            pages.map(p => FormNav.explore(p, cookie, auth, NavPlanner.plan)),
-          ).flatMap { navResults =>
+          // LLM-driven multi-hop navigation: from each page the model submits
+          // forms / follows links (gated by ActionGuard, cookie jar threaded)
+          // to reach object listings a link crawl cannot. Reached URLs join the
+          // IDOR target set.
+          val jar = CookieJar.fromHeader(cookie)
+          Future.sequence(pages.map(p =>
+            NavLoop
+              .explore(p, jar, auth, NavStepPlanner.plan, maxHops, postBudget),
+          )).flatMap { navResults =>
             val navUrls = navResults.flatten
             val targets = (pages ++ navUrls).distinct
               .filter(u => IdorPlan.queryParams(u).nonEmpty)

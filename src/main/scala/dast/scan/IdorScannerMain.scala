@@ -57,6 +57,8 @@ object IdorScannerMain:
   private def navTimeoutMs: Int = DastConfig.getInt("DAST_NAV_TIMEOUT_MS", 30000)
   private def maxDepth: Int = DastConfig.getInt("DAST_MAX_DEPTH", 2)
   private def maxPages: Int = DastConfig.getInt("DAST_MAX_PAGES", 20)
+  private def maxHops: Int = DastConfig.getInt("DAST_MAX_HOPS", 4)
+  private def postBudget: Int = DastConfig.getInt("DAST_POST_BUDGET", 3)
 
   private def authorization: Authorization = DastConfig
     .get("DAST_AUTHORIZED_HOSTS") match
@@ -80,9 +82,17 @@ object IdorScannerMain:
       maxPages,
       maxDepth,
     )
-    ctx.pipeToSelf(
-      Scanner.runIdor(ctx, url, identity, auth, navTimeoutMs, maxDepth, maxPages),
-    ) {
+    ctx.pipeToSelf(Scanner.runIdor(
+      ctx,
+      url,
+      identity,
+      auth,
+      navTimeoutMs,
+      maxDepth,
+      maxPages,
+      maxHops,
+      postBudget,
+    )) {
       case scala.util.Success(fs) => fs
       case scala.util.Failure(_) => Vector.empty
     }
