@@ -316,7 +316,11 @@ final class BrowserResource(
     if (formIndex >= 0 && formIndex < forms.size) {
       val form = forms.get(formIndex)
       values.foreach { (n, v) =>
-        Option(form.querySelector(s"[name='$n']")).foreach(_.fill(v))
+        // Fields may be hidden / selects / non-fillable; never let one throw.
+        Option(form.querySelector(s"[name='$n']")).foreach(el =>
+          try el.fill(v)
+          catch { case _: Exception => () },
+        )
       }
       Option(
         form.querySelector("button[type=submit], input[type=submit], button"),

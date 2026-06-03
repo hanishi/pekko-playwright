@@ -28,6 +28,7 @@ import dast.AuthCrawl
 import dast.Authorization
 import dast.CaptureOp
 import dast.ConsentGate
+import dast.ContentIdorProbe
 import dast.CookieJar
 import dast.DastConfig
 import dast.Finding
@@ -46,6 +47,7 @@ import dast.SinkScanOp
 import dast.SqlInjectionProbe
 import dast.SsrfProbe
 import dast.analyzer.ClaudeAnalyzer
+import dast.analyzer.ContentIdorPlanner
 import dast.analyzer.IdorPlanner
 import dast.analyzer.NavStepPlanner
 
@@ -246,25 +248,28 @@ object Scanner:
             postBudget,
             auth,
             navTimeoutMs,
-          ).flatMap { _ =>
+            Vector.empty,
+          ).flatMap { pages =>
             sessionSubmit(session) { r =>
               val reqs = r.navRequests(); r.navStop(); reqs
-            }
-          }.flatMap { requested =>
+            }.map(reqs => (pages, reqs))
+          }.flatMap { (pages, requested) =>
             val sameHost = requested.map(UrlNormalizer.normalize)
               .filter(u => Scope.inScope(seedHost, u)).distinct
-            val targets = sameHost.filter(u => IdorPlan.queryParams(u).nonEmpty)
             val log = org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner")
             log.info(
-              "SPA nav from {}: {} request(s) observed, {} API endpoint(s) to plan",
+              "SPA nav from {}: {} request(s), {} page(s) visited",
               url,
               requested.size,
-              targets.size,
+              pages.size,
             )
-            sameHost.foreach(u => log.info("  observed: {}", u))
-            Future.sequence(
-              targets.map(u => IdorProbe.scan(u, cookie, auth, IdorPlanner.plan)),
-            ).map(_.flatten.toVector)
+            // Let the LLM harvest real object ids from the visited pages and
+            // propose IDOR tests; deterministic code confirms by cross-user
+            // diff using the post-login session.
+            ContentIdorPlanner.plan(pages, sameHost).flatMap { proposals =>
+              log.info("Content-IDOR: {} proposal(s)", proposals.size)
+              ContentIdorProbe.run(proposals, cookie, auth)
+            }
           }
         }
         result.onComplete(_ => session ! crawler.pool.ResourceSession.Stop)
@@ -284,15 +289,18 @@ object Scanner:
       postsLeft: Int,
       auth: Authorization,
       navTimeoutMs: Int,
-  )(using ActorSystem[?], ExecutionContext): Future[Unit] =
-    if hops <= 0 then Future.unit
+      pages: Vector[(String, String)],
+  )(using ActorSystem[?], ExecutionContext): Future[Vector[(String, String)]] =
+    val acc = if pages.exists(_._1 == url) then pages else pages :+ (url -> html)
+    if hops <= 0 then Future.successful(acc)
     else
       val forms = FormParse.parse(html, url)
       val links = AuthCrawl.links(url, html)
         .filter(u => Scope.inScope(seedHost, u))
       NavStepPlanner.plan(url, forms, links, visited.toSeq).flatMap { step =>
         val sig = navSig(step, forms, links)
-        if step == NavStep.Done || visited.contains(sig) then Future.unit
+        if step == NavStep.Done || visited.contains(sig) then
+          Future.successful(acc)
         else
           performStep(
             session,
@@ -312,6 +320,7 @@ object Scanner:
                 postsLeft,
                 auth,
                 navTimeoutMs,
+                acc,
               )
             case Some((obsF, posts)) => obsF.flatMap { (u, h) =>
                 navHop(
@@ -324,6 +333,7 @@ object Scanner:
                   posts,
                   auth,
                   navTimeoutMs,
+                  acc,
                 )
               }
       }
