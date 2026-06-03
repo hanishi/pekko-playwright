@@ -199,13 +199,14 @@ object Scanner:
       case GateDecision.Permit =>
         val seedHost = Scope.hostOf(url).getOrElse("")
         val log = org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner")
-        // Two browsers: harvest the victim's owned object ids first, then run
-        // as the attacker and try to read them (the candidates). With no
-        // victim, single-identity (only the attacker's own ids are visible).
-        val victimPagesF = victim match
-          case None => Future.successful(Vector.empty[(String, String)])
-          case Some(v) => navigateAndCollect(
-              ctx,
+        // Spawn both sessions NOW, on the actor thread -- ctx.spawn must not run
+        // from a Future callback. Then: harvest the victim's owned object ids
+        // first, then run as the attacker and try to read them (the candidates).
+        val attackerSession = spawnNavSession(ctx, navTimeoutMs)
+        val victimSession = victim.map(_ => spawnNavSession(ctx, navTimeoutMs))
+        val victimPagesF = (victim, victimSession) match
+          case (Some(v), Some(vs)) => navigateAndCollect(
+              vs,
               url,
               v,
               auth,
@@ -213,9 +214,10 @@ object Scanner:
               maxHops,
               postBudget,
             ).map(_._1)
+          case _ => Future.successful(Vector.empty[(String, String)])
         victimPagesF.flatMap { victimPages =>
           navigateAndCollect(
-            ctx,
+            attackerSession,
             url,
             attacker,
             auth,
@@ -241,12 +243,23 @@ object Scanner:
           }
         }
 
-  /** Log in (in-context, gated) as `identity`, navigate the authenticated app,
-    * and return the visited pages, the session cookie, and observed requests.
-    * Spawns and stops its own dedicated thread-affine session.
+  /** Spawn one dedicated thread-affine nav session. Must be called on the actor
+    * thread (ctx.spawn), never from a Future callback.
+    */
+  private def spawnNavSession(
+      ctx: ActorContext[?],
+      navTimeoutMs: Int,
+  ): ActorRef[crawler.pool.ResourceSession.Command] = ctx.spawn(
+    crawler.pool.ResourceSession[BrowserResource](0, makeBrowser(navTimeoutMs)),
+    s"dast-nav-session-${poolCounter.incrementAndGet()}",
+  )
+
+  /** Log in (in-context, gated) as `identity` on the given session, navigate
+    * the authenticated app, and return the visited pages, the session cookie,
+    * and observed requests. Stops the session when done.
     */
   private def navigateAndCollect(
-      ctx: ActorContext[?],
+      session: ActorRef[crawler.pool.ResourceSession.Command],
       url: String,
       identity: Identity,
       auth: Authorization,
@@ -259,10 +272,6 @@ object Scanner:
   ): Future[(Vector[(String, String)], Option[String], Seq[String])] =
     val seedHost = Scope.hostOf(url).getOrElse("")
     val log = org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner")
-    val session = ctx.spawn(
-      crawler.pool.ResourceSession[BrowserResource](0, makeBrowser(navTimeoutMs)),
-      s"dast-nav-session-${poolCounter.incrementAndGet()}",
-    )
     val loginAllowed = identity.login.exists(l =>
       ConsentGate.decide(auth, ActionClass.Active, l.loginUrl) ==
         GateDecision.Permit,
