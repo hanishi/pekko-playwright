@@ -30,7 +30,7 @@ object ContentIdorPlanner:
 
   val ToolName = "propose_idor_tests"
   private val MaxPages = 8
-  private val MaxCharsPerPage = 4000
+  private val MaxCharsPerPage = 12000
 
   def model: String = DastConfig.get("ANTHROPIC_MODEL")
     .getOrElse("claude-opus-4-8")
@@ -137,30 +137,37 @@ object ContentIdorPlanner:
     "object comes back, that is IDOR. Empty list if there is no object " +
     "reference to test. You never write code."
 
-  /** Render two labelled content sets: the attacker's own pages and the other
-    * account's pages (whose ids are the candidates).
+  /** Render two labelled sets -- each with its observed request URLs (where ids
+    * reliably appear in query params) and page HTML. The other account's ids
+    * are the candidates.
     */
   def renderCross(
       ownPages: Seq[(String, String)],
+      ownRequests: Seq[String],
       otherPages: Seq[(String, String)],
-      requests: Seq[String],
+      otherRequests: Seq[String],
   ): String =
-    def block(ps: Seq[(String, String)]) = ps.take(MaxPages)
+    def pageBlock(ps: Seq[(String, String)]) = ps.take(MaxPages)
       .map((url, html) => s"PAGE $url\n${html.take(MaxCharsPerPage)}")
       .mkString("\n\n")
-    s"""Observed requests:
-       |${requests.distinct.take(40).mkString("\n")}
+    def reqBlock(rs: Seq[String]) = rs.distinct.take(60).mkString("\n")
+    s"""=== YOUR account (attacker) ===
+       |Requests:
+       |${reqBlock(ownRequests)}
+       |Pages:
+       |${pageBlock(ownPages)}
        |
-       |=== YOUR pages (attacker) ===
-       |${block(ownPages)}
-       |
-       |=== OTHER account's pages (use THEIR ids as candidates) ===
-       |${block(otherPages)}""".stripMargin
+       |=== OTHER account (use THEIR ids as candidates) ===
+       |Requests:
+       |${reqBlock(otherRequests)}
+       |Pages:
+       |${pageBlock(otherPages)}""".stripMargin
 
   def buildCrossRequestBody(
       ownPages: Seq[(String, String)],
+      ownRequests: Seq[String],
       otherPages: Seq[(String, String)],
-      requests: Seq[String],
+      otherRequests: Seq[String],
   ): ujson.Value = ujson.Obj(
     "model" -> model,
     "max_tokens" -> 1500,
@@ -169,17 +176,20 @@ object ContentIdorPlanner:
     "tool_choice" -> ujson.Obj("type" -> "tool", "name" -> ToolName),
     "messages" -> ujson.Arr(ujson.Obj(
       "role" -> "user",
-      "content" -> renderCross(ownPages, otherPages, requests),
+      "content" -> renderCross(ownPages, ownRequests, otherPages, otherRequests),
     )),
   )
 
-  /** Two-identity plan: candidates come from the other account's pages. */
+  /** Two-identity plan: candidates come from the other account's ids. */
   def planCross(
       ownPages: Seq[(String, String)],
+      ownRequests: Seq[String],
       otherPages: Seq[(String, String)],
-      requests: Seq[String],
+      otherRequests: Seq[String],
   )(using system: ActorSystem[?], ec: ExecutionContext): Future[Seq[Proposal]] =
-    callPlanner(buildCrossRequestBody(ownPages, otherPages, requests))
+    callPlanner(
+      buildCrossRequestBody(ownPages, ownRequests, otherPages, otherRequests),
+    )
 
   def plan(pages: Seq[(String, String)], requests: Seq[String])(using
       system: ActorSystem[?],
@@ -196,6 +206,14 @@ object ContentIdorPlanner:
         )
         Future.successful(Seq.empty)
       case Some(apiKey) =>
+        val bodyStr = ujson.write(body)
+        val idLike = "(?i)\\b[0-9A-HJKMNP-TV-Z]{26}\\b".r.findAllIn(bodyStr)
+          .toSet.size
+        log.info(
+          "Content-IDOR context: {} chars, ~{} ULID-like id(s) present",
+          bodyStr.length,
+          idLike,
+        )
         val request = HttpRequest(
           method = HttpMethods.POST,
           uri = "https://api.anthropic.com/v1/messages",
@@ -203,13 +221,15 @@ object ContentIdorPlanner:
             headers.RawHeader("x-api-key", apiKey),
             headers.RawHeader("anthropic-version", "2023-06-01"),
           ),
-          entity = HttpEntity(ContentTypes.`application/json`, ujson.write(body)),
+          entity = HttpEntity(ContentTypes.`application/json`, bodyStr),
         )
         Http()(system).singleRequest(request).flatMap { response =>
           if response.status.isSuccess() then
             Unmarshal(response.entity).to[String].map { raw =>
               val ps = Try(ujson.read(raw)).toOption.map(responseToProposals)
                 .getOrElse(Seq.empty)
+              if ps.isEmpty then
+                log.info("Content-IDOR raw response: {}", raw.take(900))
               log.info("Content-IDOR planner proposed {} test(s)", ps.size)
               ps
             }

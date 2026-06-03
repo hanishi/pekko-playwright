@@ -204,7 +204,9 @@ object Scanner:
         // first, then run as the attacker and try to read them (the candidates).
         val attackerSession = spawnNavSession(ctx, navTimeoutMs)
         val victimSession = victim.map(_ => spawnNavSession(ctx, navTimeoutMs))
-        val victimPagesF = (victim, victimSession) match
+        def sameHost(reqs: Seq[String]) = reqs.map(UrlNormalizer.normalize)
+          .filter(u => Scope.inScope(seedHost, u)).distinct
+        val victimDataF = (victim, victimSession) match
           case (Some(v), Some(vs)) => navigateAndCollect(
               vs,
               url,
@@ -213,9 +215,10 @@ object Scanner:
               navTimeoutMs,
               maxHops,
               postBudget,
-            ).map(_._1)
-          case _ => Future.successful(Vector.empty[(String, String)])
-        victimPagesF.flatMap { victimPages =>
+            ).map((pages, _, rqs) => (pages, sameHost(rqs)))
+          case _ => Future
+              .successful((Vector.empty[(String, String)], Seq.empty[String]))
+        victimDataF.flatMap { (victimPages, victimRequests) =>
           navigateAndCollect(
             attackerSession,
             url,
@@ -225,19 +228,30 @@ object Scanner:
             maxHops,
             postBudget,
           ).flatMap { (pages, cookie, requested) =>
-            val sameHost = requested.map(UrlNormalizer.normalize)
-              .filter(u => Scope.inScope(seedHost, u)).distinct
+            val reqs = sameHost(requested)
             log.info(
-              "SPA IDOR: attacker visited {} page(s), victim {} page(s)",
+              "SPA IDOR: attacker {} page(s)/{} req(s), victim {} page(s)/{} req(s)",
               pages.size,
+              reqs.size,
               victimPages.size,
+              victimRequests.size,
             )
             val proposalsF =
-              if victimPages.nonEmpty then
-                ContentIdorPlanner.planCross(pages, victimPages, sameHost)
-              else ContentIdorPlanner.plan(pages, sameHost)
+              if victimPages.nonEmpty || victimRequests.nonEmpty then
+                ContentIdorPlanner
+                  .planCross(pages, reqs, victimPages, victimRequests)
+              else ContentIdorPlanner.plan(pages, reqs)
             proposalsF.flatMap { proposals =>
               log.info("Content-IDOR: {} proposal(s)", proposals.size)
+              proposals.foreach(p =>
+                log.info(
+                  "  test: {} {} ({} candidate id(s), field={})",
+                  p.method,
+                  p.urlTemplate,
+                  p.candidates.size,
+                  p.discriminatorField,
+                ),
+              )
               ContentIdorProbe.run(proposals, cookie, auth)
             }
           }

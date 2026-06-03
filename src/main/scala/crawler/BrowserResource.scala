@@ -278,11 +278,14 @@ final class BrowserResource(
     else Seq.empty
 
   private def navGo(url: String, navTimeoutMs: Int): Unit = {
-    navPage.navigate(
-      url,
-      new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD)
-        .setTimeout(navTimeoutMs),
-    )
+    // A slow/hanging navigation must not abort the whole scan; proceed with
+    // whatever loaded (navUrl/navHtml reflect the current page either way).
+    try navPage.navigate(
+        url,
+        new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD)
+          .setTimeout(navTimeoutMs),
+      )
+    catch { case _: Exception => () }
     try navPage.waitForLoadState(
         LoadState.NETWORKIDLE,
         new Page.WaitForLoadStateOptions().setTimeout(navTimeoutMs.toDouble),
