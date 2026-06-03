@@ -36,17 +36,20 @@ object AuthCrawl:
   def links(baseUrl: String, html: String): Seq[String] =
     val base = Try(new java.net.URI(baseUrl)).toOption
     hrefRe.findAllMatchIn(html).map(_.group(1).trim)
-      .filter(h => h.nonEmpty && !h.startsWith("#")).flatMap { href =>
-        base.flatMap(b => Try(b.resolve(href).toString).toOption)
-      }.filter(u => u.startsWith("http://") || u.startsWith("https://"))
-      .distinct.toSeq
+      .filter(h => h.nonEmpty && !h.startsWith("#"))
+      .flatMap(href => base.flatMap(b => Try(b.resolve(href).toString).toOption))
+      .filter(u => u.startsWith("http://") || u.startsWith("https://")).distinct
+      .toSeq
 
   /** Discover same-host URLs reachable from `seed` (excluding the seed),
     * normalized and deduped, to `maxDepth` / `maxPages`. Fail-soft per page.
     */
-  def discover(seed: String, cookie: Option[String], maxDepth: Int, maxPages: Int)(
-      using system: ActorSystem[?], ec: ExecutionContext,
-  ): Future[Seq[String]] =
+  def discover(
+      seed: String,
+      cookie: Option[String],
+      maxDepth: Int,
+      maxPages: Int,
+  )(using system: ActorSystem[?], ec: ExecutionContext): Future[Seq[String]] =
     val seedHost = Scope.hostOf(seed).getOrElse("")
 
     def linksOf(url: String): Future[Seq[String]] = get(url, cookie).map {
@@ -63,10 +66,11 @@ object AuthCrawl:
     ): Future[Seq[String]] =
       if depth > maxDepth || frontier.isEmpty || acc.size >= maxPages then
         Future.successful(acc)
-      else Future.sequence(frontier.map(linksOf)).flatMap { results =>
-        val next = results.flatten.filterNot(seen.contains).distinct
-        loop(next.toList, depth + 1, seen ++ next, (acc ++ next).take(maxPages))
-      }
+      else
+        Future.sequence(frontier.map(linksOf)).flatMap { results =>
+          val next = results.flatten.filterNot(seen.contains).distinct
+          loop(next.toList, depth + 1, seen ++ next, (acc ++ next).take(maxPages))
+        }
 
     loop(List(seed), 0, Set(crawler.UrlNormalizer.normalize(seed)), Vector.empty)
 

@@ -29,6 +29,7 @@ import dast.CaptureOp
 import dast.ConsentGate
 import dast.DastConfig
 import dast.Finding
+import dast.FormNav
 import dast.GateDecision
 import dast.IdorPlan
 import dast.IdorProbe
@@ -42,6 +43,7 @@ import dast.SqlInjectionProbe
 import dast.SsrfProbe
 import dast.analyzer.ClaudeAnalyzer
 import dast.analyzer.IdorPlanner
+import dast.analyzer.NavPlanner
 
 /** Assembles the real, pool- and Claude-backed effects and spawns an
   * orchestrator. This is wiring, not logic: it runs only against a live target
@@ -140,17 +142,27 @@ object Scanner:
     resolveCookie(ctx, identity, auth, navTimeoutMs).flatMap { cookie =>
       AuthCrawl.discover(seed, cookie, maxDepth, maxPages).flatMap {
         discovered =>
-          val targets = (seed +: discovered).distinct
-            .filter(u => IdorPlan.queryParams(u).nonEmpty)
-          org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
-            "IDOR crawl from {}: {} page(s) discovered, {} with parameters to plan",
-            seed,
-            discovered.size,
-            targets.size,
-          )
+          val pages = (seed +: discovered).distinct
+          // LLM-driven navigation: submit forms (search/filter) on crawled pages
+          // to reach object listings a link crawl cannot. Each submission is
+          // gated by ActionGuard; result URLs join the IDOR target set.
           Future.sequence(
-            targets.map(u => IdorProbe.scan(u, cookie, auth, IdorPlanner.plan)),
-          ).map(_.flatten.toVector)
+            pages.map(p => FormNav.explore(p, cookie, auth, NavPlanner.plan)),
+          ).flatMap { navResults =>
+            val navUrls = navResults.flatten
+            val targets = (pages ++ navUrls).distinct
+              .filter(u => IdorPlan.queryParams(u).nonEmpty)
+            org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
+              "IDOR from {}: {} crawled + {} via navigation, {} to plan",
+              seed,
+              discovered.size,
+              navUrls.size,
+              targets.size,
+            )
+            Future.sequence(
+              targets.map(u => IdorProbe.scan(u, cookie, auth, IdorPlanner.plan)),
+            ).map(_.flatten.toVector)
+          }
       }
     }
 

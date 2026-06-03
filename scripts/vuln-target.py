@@ -60,9 +60,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
+            # Only a search form here, no direct account link: an account
+            # listing is reachable only by submitting the search (so a link
+            # crawl alone cannot get there; LLM-driven navigation must).
             body = (
                 b"<html><body><h1>Dashboard</h1>"
-                b'<a href="/account?id=1001">My account</a></body></html>'
+                b'<form method="POST" action="/search">'
+                b'<input type="text" name="q" placeholder="search accounts">'
+                b"<button type=submit>Search</button></form></body></html>"
             )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -181,6 +186,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(401)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
+            return
+        # Search results: a listing of accounts as links, reached only by
+        # submitting the dashboard search form (a POST the navigator must make).
+        if parsed.path == "/search":
+            body = (
+                b"<html><body><h1>Results</h1>"
+                b'<a href="/account?id=1001">Account 1001</a>'
+                b'<a href="/account?id=1002">Account 1002</a></body></html>"'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         self.send_response(404)
         self.send_header("Content-Length", "0")

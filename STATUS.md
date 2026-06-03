@@ -105,15 +105,22 @@ gitignored `*.local.json`.
 - The **browser earns its place only for execution-confirmed XSS**, DOM
   sink-reach, and authenticated login. Cookies/headers are read off a normal
   visit; redirect/SQLi/SSRF are pure HTTP and run off the browser pool entirely.
-- **Where the LLM earns its place: LLM-planned IDOR** (`IdorScannerMain`). From
-  a seed it logs in, runs an authenticated same-host crawl (`AuthCrawl`,
-  deterministic link-following) to discover object-bearing endpoints, then on
-  each the model proposes which parameter to tamper, neighbour values, and the
-  per-user discriminator field; deterministic code confirms by cross-value
-  comparison. The finding cannot exist without the model's judgment, yet the
-  model cannot fabricate one (a secured endpoint yields no diff). The crawl
-  finds endpoints (a job for a crawler, not the model); the model reasons about
-  each page. This is the one place the model is load-bearing, not garnish.
+- **Where the LLM earns its place: LLM-planned, LLM-navigated IDOR**
+  (`IdorScannerMain`). From a seed it logs in, then:
+  - **crawls** same-host links (`AuthCrawl`, deterministic) for breadth, and
+  - **navigates** by form: on each page the model (`NavPlanner`) chooses
+    search/filter forms to submit to reach object listings a link crawl cannot.
+    Every submission passes `ActionGuard` -- GET always; POST only with the
+    model's safe flag AND a destructive-pattern deny-list (the deterministic
+    floor; the model's verdict is necessary, never sufficient). §5
+    navigation-action carve-out.
+  - then on each object-bearing URL the model (`IdorPlanner`) proposes the
+    param / neighbour values / per-user field, and deterministic code confirms
+    by cross-value comparison.
+  The finding cannot exist without the model's judgment (which form to submit,
+  which IDOR to try), yet the model cannot fabricate one (a secured endpoint
+  yields no diff) nor fire a destructive action (the deny-list floor). This is
+  the one place the model is load-bearing, not garnish.
 - Elsewhere the **LLM is still the least load-bearing part.** It directs
   reflected-XSS probes, but every other deterministic finding (and SSRF) is
   model-free.

@@ -197,6 +197,21 @@ as preconditions, not features:
     fill or submit; a deterministic op performs them. Login is bounded and
     non-destructive (it reads, it does not mutate app data); everything else in
     this bullet still holds. Be mindful it can trip lockout / MFA / CAPTCHA.
+  - **Navigation-action carve-out (model-driven, deterministically fenced).**
+    To reach object-bearing pages a link crawl cannot (search / filter forms),
+    the LLM-driven navigator may submit forms it selects, bounded as follows.
+    GET-method submissions are always allowed (HTTP-read semantics). A
+    non-GET (POST) submission is allowed ONLY when BOTH hold: (a) the model
+    classifies it non-state-changing, AND (b) a deterministic deny-list passes
+    -- the action URL, field names, and submit text contain no destructive
+    pattern (delete / remove / destroy / drop / pay / payment / checkout /
+    purchase / transfer / withdraw / logout / password / email / confirm /
+    cancel / deactivate / unsubscribe). PUT / DELETE / file uploads are never
+    submitted. The model's "safe" verdict is necessary but never sufficient:
+    the deny-list is the hard floor, so a misjudgement cannot fire a
+    destructive action. Residual risk remains (a state-changing POST that
+    dodges the deny-list); this carve-out is opt-in and the floor is the
+    mitigation, not a guarantee.
 - **Be identifiable, not evasive.** For sanctioned scanning the scanner should
   announce itself (identifiable user-agent, optional scan header) and respect
   rate limits. Do **not** route the DAST path through `stealth.js` by default;
