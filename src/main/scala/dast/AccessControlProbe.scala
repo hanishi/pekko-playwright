@@ -72,8 +72,8 @@ object AccessControlProbe:
   private def fetch(request: HttpRequest)(using
       system: ActorSystem[?],
       ec: ExecutionContext,
-  ): Future[Option[(Int, String)]] = Http()(system).singleRequest(request)
-    .flatMap { response =>
+  ): Future[Option[(Int, String)]] =
+    HttpThrottle(Http()(system).singleRequest(request)).flatMap { response =>
       Unmarshal(response.entity).to[String]
         .map(body => Some((response.status.intValue(), body)))
     }.recover { case t =>

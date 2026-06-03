@@ -194,8 +194,8 @@ object NavLoop:
   private def send(request: HttpRequest)(using
       system: ActorSystem[?],
       ec: ExecutionContext,
-  ): Future[Option[(Int, Option[String], Seq[String], String)]] = Http()(system)
-    .singleRequest(request).flatMap { response =>
+  ): Future[Option[(Int, Option[String], Seq[String], String)]] =
+    HttpThrottle(Http()(system).singleRequest(request)).flatMap { response =>
       val loc = response.header[headers.Location].map(_.uri.toString)
       val set = response.headers.collect { case c: headers.`Set-Cookie` =>
         c.cookie.pair.toString

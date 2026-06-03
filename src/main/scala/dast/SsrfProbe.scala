@@ -63,7 +63,7 @@ object SsrfProbe:
       uri = url,
       headers = List(headers.RawHeader("User-Agent", UserAgent)),
     )
-    Http()(system).singleRequest(request).map { response =>
+    HttpThrottle(Http()(system).singleRequest(request)).map { response =>
       response.entity.discardBytes()
       ()
     }.recover { case t =>

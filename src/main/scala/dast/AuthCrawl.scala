@@ -80,13 +80,14 @@ object AuthCrawl:
   ): Future[Option[String]] =
     val hs = headers.RawHeader("User-Agent", UserAgent) ::
       cookie.map(c => headers.RawHeader("Cookie", c)).toList
-    Http()(system).singleRequest(HttpRequest(uri = url, headers = hs)).flatMap {
-      response =>
-        if response.status.isSuccess() then
-          Unmarshal(response.entity).to[String].map(Some(_))
-        else
-          response.entity.discardBytes()
-          Future.successful(None)
+    HttpThrottle(
+      Http()(system).singleRequest(HttpRequest(uri = url, headers = hs)),
+    ).flatMap { response =>
+      if response.status.isSuccess() then
+        Unmarshal(response.entity).to[String].map(Some(_))
+      else
+        response.entity.discardBytes()
+        Future.successful(None)
     }.recover { case t =>
       log.warn("Auth crawl error for {}: {}", url, t.getMessage)
       None
