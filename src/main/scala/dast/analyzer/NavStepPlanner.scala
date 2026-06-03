@@ -96,39 +96,37 @@ object NavStepPlanner:
       forms: Seq[FormInfo],
       links: Seq[String],
       history: Seq[String],
-  )(using
-      system: ActorSystem[?],
-      ec: ExecutionContext,
-  ): Future[NavStep] = DastConfig.get("ANTHROPIC_API_KEY") match
-    case None =>
-      log.warn("ANTHROPIC_API_KEY not set; navigator ending (done)")
-      Future.successful(NavStep.Done)
-    case Some(apiKey) =>
-      val request = HttpRequest(
-        method = HttpMethods.POST,
-        uri = "https://api.anthropic.com/v1/messages",
-        headers = List(
-          headers.RawHeader("x-api-key", apiKey),
-          headers.RawHeader("anthropic-version", "2023-06-01"),
-        ),
-        entity = HttpEntity(
-          ContentTypes.`application/json`,
-          ujson.write(buildRequestBody(url, forms, links, history)),
-        ),
-      )
-      Http()(system).singleRequest(request).flatMap { response =>
-        if response.status.isSuccess() then Unmarshal(response.entity).to[String]
-          .map { raw =>
-            val step = Try(ujson.read(raw)).toOption.map(responseToStep)
-              .getOrElse(NavStep.Done)
-            log.info("Navigator step for {}: {}", url, step)
-            step
-          }
-        else
-          response.entity.discardBytes()
-          log.warn("Navigator request failed: {}", response.status)
-          Future.successful(NavStep.Done)
-      }.recover { case t =>
-        log.warn("Navigator error: {}", t.getMessage)
-        NavStep.Done
-      }
+  )(using system: ActorSystem[?], ec: ExecutionContext): Future[NavStep] =
+    DastConfig.get("ANTHROPIC_API_KEY") match
+      case None =>
+        log.warn("ANTHROPIC_API_KEY not set; navigator ending (done)")
+        Future.successful(NavStep.Done)
+      case Some(apiKey) =>
+        val request = HttpRequest(
+          method = HttpMethods.POST,
+          uri = "https://api.anthropic.com/v1/messages",
+          headers = List(
+            headers.RawHeader("x-api-key", apiKey),
+            headers.RawHeader("anthropic-version", "2023-06-01"),
+          ),
+          entity = HttpEntity(
+            ContentTypes.`application/json`,
+            ujson.write(buildRequestBody(url, forms, links, history)),
+          ),
+        )
+        Http()(system).singleRequest(request).flatMap { response =>
+          if response.status.isSuccess() then
+            Unmarshal(response.entity).to[String].map { raw =>
+              val step = Try(ujson.read(raw)).toOption.map(responseToStep)
+                .getOrElse(NavStep.Done)
+              log.info("Navigator step for {}: {}", url, step)
+              step
+            }
+          else
+            response.entity.discardBytes()
+            log.warn("Navigator request failed: {}", response.status)
+            Future.successful(NavStep.Done)
+        }.recover { case t =>
+          log.warn("Navigator error: {}", t.getMessage)
+          NavStep.Done
+        }

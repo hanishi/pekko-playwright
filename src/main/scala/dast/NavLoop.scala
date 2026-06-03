@@ -19,7 +19,8 @@ import dast.scan.Scope
   * navigation-action carve-out). From a seed it observes the page, asks the
   * planner for ONE next step (follow a link / submit a form / done), executes
   * it through the [[ActionGuard]] floor while threading a [[CookieJar]] across
-  * hops, and harvests same-host URLs reached along the way for the IDOR planner.
+  * hops, and harvests same-host URLs reached along the way for the IDOR
+  * planner.
   *
   * The loop is a plain recursive Future (not an actor): it is sequential
   * HTTP+LLM with no browser, so the pinned-thread invariant does not apply.
@@ -69,36 +70,46 @@ object NavLoop:
       val forms = FormParse.parse(body, url)
       val links = sameHostLinks(url, body)
       if hops <= 0 || dry >= DryLimit then Future.successful(found)
-      else planner(url, forms, links, found).flatMap {
-        case NavStep.Done => Future.successful(found)
-        case step =>
-          val sig = signature(step, forms, links)
-          if visited.contains(sig) then Future.successful(found) // converged
-          else act(step, forms, links, jar, postsLeft).flatMap {
-            case None => // denied / invalid: count as dry, keep going
-              hop(url, body, jar, visited + sig, found, hops - 1, dry + 1, postsLeft)
-            case Some((nextUrl, nextBody, setCookies, postUsed)) =>
-              val harvested = (nextUrl +: sameHostLinks(nextUrl, nextBody))
-                .filterNot(found.contains)
-              hop(
-                nextUrl,
-                nextBody,
-                jar.merge(setCookies),
-                visited + sig,
-                (found ++ harvested).distinct,
-                hops - 1,
-                if harvested.isEmpty then dry + 1 else 0,
-                postsLeft - (if postUsed then 1 else 0),
-              )
-          }
-      }
+      else
+        planner(url, forms, links, found).flatMap {
+          case NavStep.Done => Future.successful(found)
+          case step =>
+            val sig = signature(step, forms, links)
+            if visited.contains(sig) then Future.successful(found) // converged
+            else
+              act(step, forms, links, jar, postsLeft).flatMap {
+                case None => // denied / invalid: count as dry, keep going
+                  hop(
+                    url,
+                    body,
+                    jar,
+                    visited + sig,
+                    found,
+                    hops - 1,
+                    dry + 1,
+                    postsLeft,
+                  )
+                case Some((nextUrl, nextBody, setCookies, postUsed)) =>
+                  val harvested = (nextUrl +: sameHostLinks(nextUrl, nextBody))
+                    .filterNot(found.contains)
+                  hop(
+                    nextUrl,
+                    nextBody,
+                    jar.merge(setCookies),
+                    visited + sig,
+                    (found ++ harvested).distinct,
+                    hops - 1,
+                    if harvested.isEmpty then dry + 1 else 0,
+                    postsLeft - (if postUsed then 1 else 0),
+                  )
+              }
+        }
 
     ConsentGate.decide(auth, ActionClass.Active, seed) match
       case GateDecision.Deny(_) => Future.successful(Seq.empty)
       case GateDecision.Permit => get(seed, jar0).flatMap {
           case None => Future.successful(Seq.empty)
-          case Some((_, body, set)) =>
-            hop(
+          case Some((_, body, set)) => hop(
               seed,
               body,
               jar0.merge(set),
@@ -110,7 +121,8 @@ object NavLoop:
             )
         }
 
-  /** Execute a step. None = not performed (denied / invalid / out of budget). */
+  /** Execute a step. None = not performed (denied / invalid / out of budget).
+    */
   private def act(
       step: NavStep,
       forms: Seq[FormInfo],
@@ -124,8 +136,8 @@ object NavLoop:
     case NavStep.Done => Future.successful(None)
     case NavStep.Follow(i) => links.lift(i) match
         case None => Future.successful(None)
-        case Some(url) =>
-          get(url, jar).map(_.map((_, b, set) => (url, b, set, false)))
+        case Some(url) => get(url, jar)
+            .map(_.map((_, b, set) => (url, b, set, false)))
     case NavStep.Submit(fi, values, safe) => forms.lift(fi) match
         case None => Future.successful(None)
         case Some(form) => ActionGuard.allow(form, safe) match
@@ -141,23 +153,21 @@ object NavLoop:
                 .map(_.map((u, b, set) => (u, b, set, form.method == "post")))
 
   /** Issue a (guarded) form submission, following at most one redirect. */
-  private def submit(
-      form: FormInfo,
-      values: Map[String, String],
-      jar: CookieJar,
-  )(using
+  private def submit(form: FormInfo, values: Map[String, String], jar: CookieJar)(
+      using
       system: ActorSystem[?],
       ec: ExecutionContext,
   ): Future[Option[(String, String, Seq[String])]] =
     val encoded = values.map((k, v) => s"${enc(k)}=${enc(v)}").mkString("&")
     val request =
-      if form.method == "post" then HttpRequest(
-        method = HttpMethods.POST,
-        uri = form.action,
-        headers = hdrs(jar),
-        entity =
-          HttpEntity(ContentTypes.`application/x-www-form-urlencoded`, encoded),
-      )
+      if form.method == "post" then
+        HttpRequest(
+          method = HttpMethods.POST,
+          uri = form.action,
+          headers = hdrs(jar),
+          entity =
+            HttpEntity(ContentTypes.`application/x-www-form-urlencoded`, encoded),
+        )
       else
         val sep = if form.action.contains("?") then "&" else "?"
         val uri =
@@ -169,8 +179,8 @@ object NavLoop:
           case Some(next) => get(next, jar.merge(set))
               .map(_.map((_, b, s2) => (next, b, set ++ s2)))
           case None => Future.successful(Some((form.action, body, set)))
-      case Some((_, _, set, body)) =>
-        Future.successful(Some((request.uri.toString, body, set)))
+      case Some((_, _, set, body)) => Future
+          .successful(Some((request.uri.toString, body, set)))
       case None => Future.successful(None)
     }
 
@@ -187,8 +197,8 @@ object NavLoop:
   ): Future[Option[(Int, Option[String], Seq[String], String)]] = Http()(system)
     .singleRequest(request).flatMap { response =>
       val loc = response.header[headers.Location].map(_.uri.toString)
-      val set = response.headers.collect {
-        case c: headers.`Set-Cookie` => c.cookie.pair.toString
+      val set = response.headers.collect { case c: headers.`Set-Cookie` =>
+        c.cookie.pair.toString
       }
       Unmarshal(response.entity).to[String]
         .map(body => Some((response.status.intValue(), loc, set, body)))
@@ -203,16 +213,16 @@ object NavLoop:
       links: Seq[String],
   ): String = step match
     case NavStep.Follow(i) => s"follow:${links.lift(i).getOrElse(i.toString)}"
-    case NavStep.Submit(fi, values, _) =>
-      s"submit:${forms.lift(fi).map(_.action).getOrElse(fi.toString)}:${values.toSeq.sorted}"
+    case NavStep.Submit(fi, values, _) => s"submit:${forms.lift(fi)
+          .map(_.action).getOrElse(fi.toString)}:${values.toSeq.sorted}"
     case NavStep.Done => "done"
 
-  private def hdrs(jar: CookieJar): List[HttpHeader] =
-    headers.RawHeader("User-Agent", UserAgent) ::
-      jar.header.map(c => headers.RawHeader("Cookie", c)).toList
+  private def hdrs(jar: CookieJar): List[HttpHeader] = headers
+    .RawHeader("User-Agent", UserAgent) ::
+    jar.header.map(c => headers.RawHeader("Cookie", c)).toList
 
-  private def resolve(base: String, href: String): Option[String] =
-    scala.util.Try(new java.net.URI(base).resolve(href).toString).toOption
+  private def resolve(base: String, href: String): Option[String] = scala.util
+    .Try(new java.net.URI(base).resolve(href).toString).toOption
 
-  private def enc(s: String): String =
-    URLEncoder.encode(s, StandardCharsets.UTF_8)
+  private def enc(s: String): String = URLEncoder
+    .encode(s, StandardCharsets.UTF_8)

@@ -52,6 +52,47 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        # SPA shell: session-gated HTML whose JS fetches the JSON API on load.
+        # A link crawl sees no account here; only observing the XHR reveals it.
+        if parsed.path == "/app":
+            if "session=" not in self.headers.get("Cookie", ""):
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = (
+                b"<html><head><title>app</title></head><body><div id=app></div>"
+                b"<script>fetch('/api/account?id=1001')"
+                b".then(r=>r.json()).then(d=>{"
+                b"document.getElementById('app').textContent=d.email;});"
+                b"</script></body></html>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        # JSON API behind the SPA: same IDOR as /account (session required,
+        # ownership NOT checked), but reached only via the SPA's fetch.
+        if parsed.path == "/api/account":
+            if "session=" not in self.headers.get("Cookie", ""):
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            ident = params.get("id", ["0"])[0]
+            body = (
+                f'{{"id":"{ident}","email":"user{ident}@example.com"}}'
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         # Authenticated dashboard: session-gated, links to the user's account so
         # an authenticated crawl can navigate from here to /account.
         if parsed.path == "/dashboard":

@@ -75,8 +75,11 @@ All read from the environment or `.env.local` (no shell export needed), via
 - `DAST_NAV_TIMEOUT_MS`, `DAST_MAX_PAGES`, `DAST_MAX_DEPTH` (tuning)
 
 Run: `sbt 'runMain dast.scan.ScannerMain <url>'` (single URL),
-`dast.scan.SiteScannerMain <seed>` (crawl + scan each), or
-`dast.scan.AccessScannerMain <spec.json>` (assisted access-control / IDOR).
+`dast.scan.SiteScannerMain <seed>` (crawl + scan each),
+`dast.scan.AccessScannerMain <spec.json>` (assisted access-control / IDOR),
+`dast.scan.IdorScannerMain <seed> <spec.json>` (login + crawl + multi-hop
+nav + LLM-planned IDOR), or `dast.scan.SpaIdorScannerMain <app-url> <spec.json>`
+(authenticated SPA: capture XHR/fetch endpoints, then IDOR).
 
 Access control is the one **assisted** check: it is operator-driven, not
 "point at a URL and go". You describe identities and assertion cases (URL +
@@ -102,9 +105,12 @@ gitignored `*.local.json`.
 
 ## Honest architecture notes
 
-- The **browser earns its place only for execution-confirmed XSS**, DOM
-  sink-reach, and authenticated login. Cookies/headers are read off a normal
-  visit; redirect/SQLi/SSRF are pure HTTP and run off the browser pool entirely.
+- The **browser earns its place for execution-confirmed XSS**, DOM sink-reach,
+  authenticated login, and **SPA network capture** (`SpaIdorScannerMain` /
+  `BrowserResource.captureRequests`): loading an app in an authenticated browser
+  and observing the XHR/fetch it makes reveals the JSON API surface a link crawl
+  never sees, which is exactly where SPA IDOR lives. Cookies/headers are read off
+  a normal visit; redirect/SQLi/SSRF are pure HTTP and run off the browser pool.
 - **Where the LLM earns its place: LLM-planned, LLM-navigated IDOR**
   (`IdorScannerMain`). From a seed it logs in, then:
   - **crawls** same-host links (`AuthCrawl`, deterministic) for breadth, and

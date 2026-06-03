@@ -12,6 +12,7 @@ import scala.util.Try
 import org.slf4j.LoggerFactory
 
 import com.microsoft.playwright.*
+import com.microsoft.playwright.options.Cookie as PwCookie
 import com.microsoft.playwright.options.LoadState
 import com.microsoft.playwright.options.Proxy as PlaywrightProxy
 import com.microsoft.playwright.options.WaitUntilState
@@ -162,6 +163,46 @@ final class BrowserResource(
     try op(page)
     finally
       try page.close()
+      catch { case _: Exception => () }
+  }
+
+  /** Load `url` in a fresh, optionally cookie-authenticated context and capture
+    * every request the page makes (including JS-driven XHR / fetch), so an
+    * SPA's API surface is observable. Returns the requested URLs (deduped).
+    * Browser work on the pinned thread: invoke only via `pool.submit`.
+    * Read-only (it navigates and observes; it submits nothing).
+    */
+  def captureRequests(
+      url: String,
+      cookies: Seq[(String, String)],
+      navTimeoutMs: Int,
+  ): Seq[String] = {
+    val ctx = newContext()
+    try {
+      if (cookies.nonEmpty) ctx
+        .addCookies(cookies.map((n, v) => new PwCookie(n, v).setUrl(url)).asJava)
+      val page = ctx.newPage()
+      val seen = java.util.Collections
+        .synchronizedList(new java.util.ArrayList[String]())
+      page.onRequest { (req: Request) =>
+        seen.add(req.url()); ()
+      }
+      try {
+        page.navigate(
+          url,
+          new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD)
+            .setTimeout(navTimeoutMs),
+        )
+        // Let JS-driven XHR/fetch settle so the SPA's API calls are captured.
+        try page.waitForLoadState(
+            LoadState.NETWORKIDLE,
+            new Page.WaitForLoadStateOptions().setTimeout(navTimeoutMs.toDouble),
+          )
+        catch { case _: Exception => () }
+      } catch { case _: Exception => () }
+      seen.asScala.toList.distinct
+    } finally
+      try ctx.close()
       catch { case _: Exception => () }
   }
 

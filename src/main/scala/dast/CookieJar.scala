@@ -5,8 +5,8 @@ package dast
   * Multi-hop flows accumulate server state: a step's `Set-Cookie` must be
   * replayed on the next request (a login/search may rotate or add cookies).
   * Pure and immutable: `merge` folds in `Set-Cookie` values, `header` renders
-  * the `Cookie` request header. Only the name=value pair of each cookie is
-  * kept (attributes like Path/HttpOnly are irrelevant to replay here).
+  * the `Cookie` request header. Only the name=value pair of each cookie is kept
+  * (attributes like Path/HttpOnly are irrelevant to replay here).
   */
 final case class CookieJar(cookies: Map[String, String]):
 
@@ -35,8 +35,10 @@ object CookieJar:
     ).toMap
 
   /** The name=value pair from a `Set-Cookie` value (before the first `;`). */
-  private[dast] def parseSetCookie(setCookie: String): Option[(String, String)] =
-    setCookie.split(";", 2).headOption.flatMap(_.split("=", 2) match
+  private[dast] def parseSetCookie(
+      setCookie: String,
+  ): Option[(String, String)] = setCookie.split(";", 2).headOption.flatMap(
+    _.split("=", 2) match
       case Array(k, v) => Some(k.trim -> v.trim)
       case _ => None,
-    )
+  )

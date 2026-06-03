@@ -172,8 +172,51 @@ object Scanner:
       }
     }
 
+  /** Run an IDOR scan of an SPA target: load it in an authenticated browser,
+    * capture the same-host requests its JS makes (the API surface a link crawl
+    * never sees), then IDOR-plan the captured param-bearing endpoints. The
+    * browser earns its place here: observing XHR/fetch is what HTTP cannot do.
+    */
+  def runSpaIdor(
+      ctx: ActorContext[?],
+      url: String,
+      identity: Identity,
+      auth: Authorization,
+      navTimeoutMs: Int = 30000,
+  )(using ActorSystem[?], ExecutionContext): Future[Vector[Finding]] =
+    val seedHost = Scope.hostOf(url).getOrElse("")
+    // Build the pool synchronously here (ctx.spawn must run on the actor
+    // thread, never from a Future callback), then reuse it for login + capture.
+    val pool = buildPool(ctx, 1, navTimeoutMs)
+    resolveCookieOn(pool, identity, auth).flatMap { cookie =>
+      pool.submit(r => r.captureRequests(url, parseCookies(cookie), navTimeoutMs))
+        .flatMap { requested =>
+          val targets = requested.map(UrlNormalizer.normalize)
+            .filter(u => Scope.inScope(seedHost, u))
+            .filter(u => IdorPlan.queryParams(u).nonEmpty).distinct
+          org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
+            "SPA capture from {}: {} request(s), {} same-host API endpoint(s) to plan",
+            url,
+            requested.size,
+            targets.size,
+          )
+          Future.sequence(
+            targets.map(u => IdorProbe.scan(u, cookie, auth, IdorPlanner.plan)),
+          ).map(_.flatten.toVector)
+        }
+    }
+
+  /** Parse a Cookie header value into (name, value) pairs. */
+  private def parseCookies(header: Option[String]): Seq[(String, String)] =
+    header.map(_.split(";").toSeq.flatMap(p =>
+      p.split("=", 2) match
+        case Array(k, v) => Some(k.trim -> v.trim)
+        case _ => None,
+    )).getOrElse(Seq.empty)
+
   /** A single identity's session cookie: minted by login if configured (gated,
     * on the pool), else the static cookie. Login failure falls back to static.
+    * Builds the pool lazily (only when a login is needed) on the actor thread.
     */
   private def resolveCookie(
       ctx: ActorContext[?],
@@ -183,18 +226,30 @@ object Scanner:
   )(using ActorSystem[?], ExecutionContext): Future[Option[String]] =
     identity.login match
       case None => Future.successful(identity.cookie)
-      case Some(login) =>
-        ConsentGate.decide(auth, ActionClass.Active, login.loginUrl) match
-          case GateDecision.Deny(reason) =>
-            ctx_log_skip("login", reason)
-            Future.successful(identity.cookie)
-          case GateDecision.Permit => buildPool(ctx, 1, navTimeoutMs)
-              .submit(r =>
-                LoginOp.login(r, login.loginUrl, login.username, login.password),
-              ).map {
-                case Right(c) => Some(c)
-                case Left(_) => identity.cookie
-              }
+      case Some(_) =>
+        resolveCookieOn(buildPool(ctx, 1, navTimeoutMs), identity, auth)
+
+  /** As [[resolveCookie]] but on a pre-built pool (so the caller controls when
+    * `ctx.spawn` runs -- it must be on the actor thread, not a Future
+    * callback).
+    */
+  private def resolveCookieOn(
+      pool: Pool[BrowserResource],
+      identity: Identity,
+      auth: Authorization,
+  )(using ExecutionContext): Future[Option[String]] = identity.login match
+    case None => Future.successful(identity.cookie)
+    case Some(login) =>
+      ConsentGate.decide(auth, ActionClass.Active, login.loginUrl) match
+        case GateDecision.Deny(reason) =>
+          ctx_log_skip("login", reason)
+          Future.successful(identity.cookie)
+        case GateDecision.Permit => pool.submit(r =>
+            LoginOp.login(r, login.loginUrl, login.username, login.password),
+          ).map {
+            case Right(c) => Some(c)
+            case Left(_) => identity.cookie
+          }
 
   /** Replace each login-configured identity's cookie with one minted by
     * actually logging in (on the pinned thread, gated by host). A failed or
@@ -247,9 +302,13 @@ object Scanner:
             ),
           ),
       ),
-      "dast-browser-pool",
+      s"dast-browser-pool-${poolCounter.incrementAndGet()}",
     )
     poolRef.asPool[BrowserResource]
+
+  // Unique pool actor names: a run may build more than one pool (e.g. login
+  // then capture), and actor names must not collide.
+  private val poolCounter = new AtomicInteger(0)
 
   private def scanEffects(
       pool: Pool[BrowserResource],
