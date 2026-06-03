@@ -30,8 +30,8 @@ object FormParse:
       val attrs = m.group(1)
       val body = m.group(2)
       val method = attr(attrs, "method").getOrElse("get").toLowerCase
-      val action = attr(attrs, "action").flatMap(resolve(baseUrl, _))
-        .getOrElse(baseUrl)
+      val action = attr(attrs, "action").map(Html.unescape)
+        .flatMap(resolve(baseUrl, _)).getOrElse(baseUrl)
       val fields = inputRe.findAllMatchIn(body).flatMap { im =>
         val a = im.group(2)
         attr(a, "name").filter(_.nonEmpty)

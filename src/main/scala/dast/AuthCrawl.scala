@@ -35,7 +35,7 @@ object AuthCrawl:
     */
   def links(baseUrl: String, html: String): Seq[String] =
     val base = Try(new java.net.URI(baseUrl)).toOption
-    hrefRe.findAllMatchIn(html).map(_.group(1).trim)
+    hrefRe.findAllMatchIn(html).map(m => Html.unescape(m.group(1).trim))
       .filter(h => h.nonEmpty && !h.startsWith("#"))
       .flatMap(href => base.flatMap(b => Try(b.resolve(href).toString).toOption))
       .filter(u => u.startsWith("http://") || u.startsWith("https://")).distinct
