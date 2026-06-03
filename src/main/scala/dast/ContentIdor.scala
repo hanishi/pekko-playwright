@@ -37,11 +37,13 @@ object ContentIdor:
     Finding(
       kind = FindingKind.BrokenAccessControl,
       severity = Severity.High,
-      evidence =
-        s"${p.method} ${fill(p.urlTemplate, candidate)} returned another caller's '${p.discriminatorField}' ($leaked) (IDOR)",
+      evidence = s"${p.method} ${fill(
+          p.urlTemplate,
+          candidate,
+        )} returned another caller's '${p.discriminatorField}' ($leaked) (IDOR)",
       reproducible = true,
-      replay =
-        s"idor ${p.method} ${p.urlTemplate} id=$candidate field=${p.discriminatorField}",
+      replay = s"idor ${p.method} ${p.urlTemplate} id=$candidate field=${p
+          .discriminatorField}",
     )
 
   /** Parse the tool's `proposals` array, dropping malformed/empty entries.
@@ -58,8 +60,8 @@ object ContentIdor:
         body = p.obj.get("bodyTemplate").flatMap(_.strOpt).filter(_.nonEmpty)
         cands = p.obj.get("candidates").flatMap(_.arrOpt).getOrElse(Nil)
           .flatMap(strOrNum).filter(_.nonEmpty).distinct
-        if cands.nonEmpty && (urlT.contains("{id}") ||
-          body.exists(_.contains("{id}")))
+        if cands.nonEmpty &&
+          (urlT.contains("{id}") || body.exists(_.contains("{id}")))
       yield Proposal(method, urlT, body, own, cands.toSeq, field)
     }.toSeq
 

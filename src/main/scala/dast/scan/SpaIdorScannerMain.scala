@@ -31,9 +31,9 @@ object SpaIdorScannerMain:
     val specPath = args.drop(1).headOption.filter(_.nonEmpty)
       .orElse(DastConfig.get("DAST_ACCESS_SPEC"))
     (url, specPath) match
-      case (Some(target), Some(path)) => loadIdentity(path) match
-          case Right(identity) => ActorSystem(
-              guardian(target, identity, authorization),
+      case (Some(target), Some(path)) => loadIdentities(path) match
+          case Right((attacker, victim)) => ActorSystem(
+              guardian(target, attacker, victim, authorization),
               "dast-spa-idor-scanner",
             )
           case Left(err) =>
@@ -44,13 +44,26 @@ object SpaIdorScannerMain:
           .println("usage: SpaIdorScannerMain <app-url> <identity-spec.json>")
         sys.exit(2)
 
-  private def loadIdentity(path: String): Either[String, Identity] = Try {
+  /** Attacker + optional victim. Two-identity IDOR uses identities named
+    * `attacker` and `victim`; a single unnamed identity is the attacker (no
+    * cross-account candidates).
+    */
+  private def loadIdentities(
+      path: String,
+  ): Either[String, (Identity, Option[Identity])] = Try {
     val src = scala.io.Source.fromFile(path, "UTF-8")
     try src.mkString
     finally src.close()
   }.toEither.left.map(e => s"cannot read spec '$path': ${e.getMessage}")
     .flatMap(AccessControlCheck.parseSpec(_).left.map(e => s"invalid spec: $e"))
-    .flatMap(_.identities.values.headOption.toRight("spec has no identities"))
+    .flatMap { spec =>
+      val ids = spec.identities
+      val attacker = ids.get("attacker")
+        .orElse(if ids.size == 1 then ids.values.headOption else None)
+      attacker
+        .toRight("spec needs an 'attacker' identity (and optional 'victim')")
+        .map(a => (a, ids.get("victim")))
+    }
 
   private def navTimeoutMs: Int = DastConfig.getInt("DAST_NAV_TIMEOUT_MS", 30000)
   private def maxHops: Int = DastConfig.getInt("DAST_MAX_HOPS", 6)
@@ -64,22 +77,30 @@ object SpaIdorScannerMain:
 
   private def guardian(
       url: String,
-      identity: Identity,
+      attacker: Identity,
+      victim: Option[Identity],
       auth: Authorization,
   ): Behavior[Vector[Finding]] = Behaviors.setup { ctx =>
     given ExecutionContext = ctx.executionContext
     given ActorSystem[?] = ctx.system
 
     ctx.log.info(
-      "SPA IDOR scan of {} (active scope: {})",
+      "SPA IDOR scan of {} (active scope: {}, victim identity: {})",
       url,
       if auth.allowActive then auth.authorizedHosts.mkString(",")
       else "observe-only (skipped)",
+      victim.isDefined,
     )
-    ctx.pipeToSelf(
-      Scanner
-        .runSpaIdor(ctx, url, identity, auth, navTimeoutMs, maxHops, postBudget),
-    ) {
+    ctx.pipeToSelf(Scanner.runSpaIdor(
+      ctx,
+      url,
+      attacker,
+      victim,
+      auth,
+      navTimeoutMs,
+      maxHops,
+      postBudget,
+    )) {
       case scala.util.Success(fs) => fs
       case scala.util.Failure(t) =>
         ctx.log.error("SPA scan failed: {}", t.toString)

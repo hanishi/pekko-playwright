@@ -187,7 +187,8 @@ object Scanner:
   def runSpaIdor(
       ctx: ActorContext[?],
       url: String,
-      identity: Identity,
+      attacker: Identity,
+      victim: Option[Identity],
       auth: Authorization,
       navTimeoutMs: Int = 30000,
       maxHops: Int = 6,
@@ -197,83 +198,110 @@ object Scanner:
       case GateDecision.Deny(_) => Future.successful(Vector.empty)
       case GateDecision.Permit =>
         val seedHost = Scope.hostOf(url).getOrElse("")
-        // One dedicated thread-affine browser session (no pool/router needed).
-        val session = ctx.spawn(
-          crawler.pool
-            .ResourceSession[BrowserResource](0, makeBrowser(navTimeoutMs)),
-          s"dast-nav-session-${poolCounter.incrementAndGet()}",
-        )
-        // Log in WITHIN the nav context (so the app's JS sets up the client
-        // session incl. localStorage), then navigate to the seed and observe.
-        // The post-login cookies are reused for the (HTTP) IDOR confirm step.
-        val loginAllowed = identity.login.exists(l =>
-          ConsentGate.decide(auth, ActionClass.Active, l.loginUrl) ==
-            GateDecision.Permit,
-        )
-        org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
-          "SPA: login configured={}, loginAllowed={}",
-          identity.login.isDefined,
-          loginAllowed,
-        )
-        val result = sessionSubmit(session) { r =>
-          r.navOpen(parseCookies(identity.cookie), url)
-          if loginAllowed then
-            identity.login.foreach(l =>
-              r.navLogin(l.loginUrl, l.username, l.password, navTimeoutMs),
-            )
-          val landedAfterLogin = r.navUrl()
-          r.navGoto(url, navTimeoutMs)
-          // If the seed is public and bounced us back to a login page, fall
-          // back to where login landed (the authenticated area).
-          if r.navUrl().contains("/login") &&
-            !landedAfterLogin.contains("/login")
-          then r.navGoto(landedAfterLogin, navTimeoutMs)
-          (r.navUrl(), r.navHtml(), r.navCookies())
-        }.flatMap { (u0, h0, cookiePairs) =>
-          val cookie =
-            if cookiePairs.isEmpty then identity.cookie
-            else Some(cookiePairs.map((n, v) => s"$n=$v").mkString("; "))
-          org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
-            "SPA nav: landed on {} after auth ({} cookie(s) in context)",
-            u0,
-            cookiePairs.size,
-          )
-          navHop(
-            session,
-            seedHost,
-            u0,
-            h0,
-            Set.empty,
-            maxHops,
-            postBudget,
+        val log = org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner")
+        // Two browsers: harvest the victim's owned object ids first, then run
+        // as the attacker and try to read them (the candidates). With no
+        // victim, single-identity (only the attacker's own ids are visible).
+        val victimPagesF = victim match
+          case None => Future.successful(Vector.empty[(String, String)])
+          case Some(v) => navigateAndCollect(
+              ctx,
+              url,
+              v,
+              auth,
+              navTimeoutMs,
+              maxHops,
+              postBudget,
+            ).map(_._1)
+        victimPagesF.flatMap { victimPages =>
+          navigateAndCollect(
+            ctx,
+            url,
+            attacker,
             auth,
             navTimeoutMs,
-            Vector.empty,
-          ).flatMap { pages =>
-            sessionSubmit(session) { r =>
-              val reqs = r.navRequests(); r.navStop(); reqs
-            }.map(reqs => (pages, reqs))
-          }.flatMap { (pages, requested) =>
+            maxHops,
+            postBudget,
+          ).flatMap { (pages, cookie, requested) =>
             val sameHost = requested.map(UrlNormalizer.normalize)
               .filter(u => Scope.inScope(seedHost, u)).distinct
-            val log = org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner")
             log.info(
-              "SPA nav from {}: {} request(s), {} page(s) visited",
-              url,
-              requested.size,
+              "SPA IDOR: attacker visited {} page(s), victim {} page(s)",
               pages.size,
+              victimPages.size,
             )
-            // Let the LLM harvest real object ids from the visited pages and
-            // propose IDOR tests; deterministic code confirms by cross-user
-            // diff using the post-login session.
-            ContentIdorPlanner.plan(pages, sameHost).flatMap { proposals =>
+            val proposalsF =
+              if victimPages.nonEmpty then
+                ContentIdorPlanner.planCross(pages, victimPages, sameHost)
+              else ContentIdorPlanner.plan(pages, sameHost)
+            proposalsF.flatMap { proposals =>
               log.info("Content-IDOR: {} proposal(s)", proposals.size)
               ContentIdorProbe.run(proposals, cookie, auth)
             }
           }
         }
-        result.onComplete(_ => session ! crawler.pool.ResourceSession.Stop)
-        result
+
+  /** Log in (in-context, gated) as `identity`, navigate the authenticated app,
+    * and return the visited pages, the session cookie, and observed requests.
+    * Spawns and stops its own dedicated thread-affine session.
+    */
+  private def navigateAndCollect(
+      ctx: ActorContext[?],
+      url: String,
+      identity: Identity,
+      auth: Authorization,
+      navTimeoutMs: Int,
+      maxHops: Int,
+      postBudget: Int,
+  )(using
+      ActorSystem[?],
+      ExecutionContext,
+  ): Future[(Vector[(String, String)], Option[String], Seq[String])] =
+    val seedHost = Scope.hostOf(url).getOrElse("")
+    val log = org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner")
+    val session = ctx.spawn(
+      crawler.pool.ResourceSession[BrowserResource](0, makeBrowser(navTimeoutMs)),
+      s"dast-nav-session-${poolCounter.incrementAndGet()}",
+    )
+    val loginAllowed = identity.login.exists(l =>
+      ConsentGate.decide(auth, ActionClass.Active, l.loginUrl) ==
+        GateDecision.Permit,
+    )
+    val result = sessionSubmit(session) { r =>
+      r.navOpen(parseCookies(identity.cookie), url)
+      if loginAllowed then
+        identity.login.foreach(l =>
+          r.navLogin(l.loginUrl, l.username, l.password, navTimeoutMs),
+        )
+      val landedAfterLogin = r.navUrl()
+      r.navGoto(url, navTimeoutMs)
+      if r.navUrl().contains("/login") && !landedAfterLogin.contains("/login")
+      then r.navGoto(landedAfterLogin, navTimeoutMs)
+      (r.navUrl(), r.navHtml(), r.navCookies())
+    }.flatMap { (u0, h0, cookiePairs) =>
+      val cookie =
+        if cookiePairs.isEmpty then identity.cookie
+        else Some(cookiePairs.map((n, v) => s"$n=$v").mkString("; "))
+      log.info("SPA nav: landed on {} ({} cookie(s))", u0, cookiePairs.size)
+      navHop(
+        session,
+        seedHost,
+        u0,
+        h0,
+        Set.empty,
+        maxHops,
+        postBudget,
+        auth,
+        navTimeoutMs,
+        Vector.empty,
+      ).flatMap { pages =>
+        sessionSubmit(session) { r =>
+          val reqs = r.navRequests(); r.navStop(); reqs
+        }.map(reqs => (pages, cookie, reqs))
+      }
+    }
+    result.onComplete(_ => session ! crawler.pool.ResourceSession.Stop)
+    result
 
   /** One navigation hop in the browser session: observe the live page, ask the
     * model for a step, gate it, perform it on the persistent page, recurse.
