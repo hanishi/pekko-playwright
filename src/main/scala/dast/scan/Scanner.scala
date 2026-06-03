@@ -23,6 +23,7 @@ import dast.AccessControlCheck.AccessSpec
 import dast.AccessControlCheck.Identity
 import dast.AccessControlProbe
 import dast.ActionClass
+import dast.ActionGuard
 import dast.AuthCrawl
 import dast.Authorization
 import dast.CaptureOp
@@ -30,11 +31,13 @@ import dast.ConsentGate
 import dast.CookieJar
 import dast.DastConfig
 import dast.Finding
+import dast.FormParse
 import dast.GateDecision
 import dast.IdorPlan
 import dast.IdorProbe
 import dast.LoginOp
 import dast.NavLoop
+import dast.NavStep
 import dast.Oast
 import dast.OastListener
 import dast.OpenRedirectProbe
@@ -172,10 +175,12 @@ object Scanner:
       }
     }
 
-  /** Run an IDOR scan of an SPA target: load it in an authenticated browser,
-    * capture the same-host requests its JS makes (the API surface a link crawl
-    * never sees), then IDOR-plan the captured param-bearing endpoints. The
-    * browser earns its place here: observing XHR/fetch is what HTTP cannot do.
+  /** Run an IDOR scan of an SPA target by driving a real browser: the model
+    * navigates (clicks links / submits forms) through the app while we record
+    * every request it makes, then we IDOR-plan the captured (param-bearing,
+    * same-host) API endpoints. This needs no pool -- one dedicated, thread-
+    * affine [[ResourceSession]] holds a single page alive across the LLM-paced
+    * hops (the LLM call runs off the pinned thread, between submits).
     */
   def runSpaIdor(
       ctx: ActorContext[?],
@@ -183,28 +188,197 @@ object Scanner:
       identity: Identity,
       auth: Authorization,
       navTimeoutMs: Int = 30000,
+      maxHops: Int = 6,
+      postBudget: Int = 3,
   )(using ActorSystem[?], ExecutionContext): Future[Vector[Finding]] =
-    val seedHost = Scope.hostOf(url).getOrElse("")
-    // Build the pool synchronously here (ctx.spawn must run on the actor
-    // thread, never from a Future callback), then reuse it for login + capture.
-    val pool = buildPool(ctx, 1, navTimeoutMs)
-    resolveCookieOn(pool, identity, auth).flatMap { cookie =>
-      pool.submit(r => r.captureRequests(url, parseCookies(cookie), navTimeoutMs))
-        .flatMap { requested =>
-          val targets = requested.map(UrlNormalizer.normalize)
-            .filter(u => Scope.inScope(seedHost, u))
-            .filter(u => IdorPlan.queryParams(u).nonEmpty).distinct
-          org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
-            "SPA capture from {}: {} request(s), {} same-host API endpoint(s) to plan",
-            url,
-            requested.size,
-            targets.size,
-          )
-          Future.sequence(
-            targets.map(u => IdorProbe.scan(u, cookie, auth, IdorPlanner.plan)),
-          ).map(_.flatten.toVector)
+    ConsentGate.decide(auth, ActionClass.Active, url) match
+      case GateDecision.Deny(_) => Future.successful(Vector.empty)
+      case GateDecision.Permit =>
+        val seedHost = Scope.hostOf(url).getOrElse("")
+        // One dedicated thread-affine browser session (no pool/router needed).
+        val session = ctx.spawn(
+          crawler.pool
+            .ResourceSession[BrowserResource](0, makeBrowser(navTimeoutMs)),
+          s"dast-nav-session-${poolCounter.incrementAndGet()}",
+        )
+        val result = resolveCookieVia(session, identity, auth).flatMap { cookie =>
+          sessionSubmit(session) { r =>
+            r.navStart(url, parseCookies(cookie), navTimeoutMs)
+            (r.navUrl(), r.navHtml())
+          }.flatMap { (u0, h0) =>
+            navHop(
+              session,
+              seedHost,
+              u0,
+              h0,
+              Set.empty,
+              maxHops,
+              postBudget,
+              auth,
+              navTimeoutMs,
+            )
+          }.flatMap { _ =>
+            sessionSubmit(session) { r =>
+              val reqs = r.navRequests(); r.navStop(); reqs
+            }
+          }.flatMap { requested =>
+            val targets = requested.map(UrlNormalizer.normalize)
+              .filter(u => Scope.inScope(seedHost, u))
+              .filter(u => IdorPlan.queryParams(u).nonEmpty).distinct
+            org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
+              "SPA nav from {}: {} request(s) observed, {} API endpoint(s) to plan",
+              url,
+              requested.size,
+              targets.size,
+            )
+            Future.sequence(
+              targets.map(u => IdorProbe.scan(u, cookie, auth, IdorPlanner.plan)),
+            ).map(_.flatten.toVector)
+          }
         }
-    }
+        result.onComplete(_ => session ! crawler.pool.ResourceSession.Stop)
+        result
+
+  /** One navigation hop in the browser session: observe the live page, ask the
+    * model for a step, gate it, perform it on the persistent page, recurse.
+    * Terminates on the hop budget, a repeated action, or the model's `Done`.
+    */
+  private def navHop(
+      session: ActorRef[crawler.pool.ResourceSession.Command],
+      seedHost: String,
+      url: String,
+      html: String,
+      visited: Set[String],
+      hops: Int,
+      postsLeft: Int,
+      auth: Authorization,
+      navTimeoutMs: Int,
+  )(using ActorSystem[?], ExecutionContext): Future[Unit] =
+    if hops <= 0 then Future.unit
+    else
+      val forms = FormParse.parse(html, url)
+      val links = AuthCrawl.links(url, html)
+        .filter(u => Scope.inScope(seedHost, u))
+      NavStepPlanner.plan(url, forms, links, visited.toSeq).flatMap { step =>
+        val sig = navSig(step, forms, links)
+        if step == NavStep.Done || visited.contains(sig) then Future.unit
+        else
+          performStep(
+            session,
+            step,
+            forms,
+            links,
+            postsLeft,
+            navTimeoutMs,
+          ) match
+            case None => navHop(
+                session,
+                seedHost,
+                url,
+                html,
+                visited + sig,
+                hops - 1,
+                postsLeft,
+                auth,
+                navTimeoutMs,
+              )
+            case Some((obsF, posts)) => obsF.flatMap { (u, h) =>
+                navHop(
+                  session,
+                  seedHost,
+                  u,
+                  h,
+                  visited + sig,
+                  hops - 1,
+                  posts,
+                  auth,
+                  navTimeoutMs,
+                )
+              }
+      }
+
+  /** Perform one nav step on the session. None = not performed (invalid index,
+    * gate refusal, or POST budget exhausted); Some is the future page state and
+    * the remaining POST budget.
+    */
+  private def performStep(
+      session: ActorRef[crawler.pool.ResourceSession.Command],
+      step: NavStep,
+      forms: Seq[FormParse.FormInfo],
+      links: Seq[String],
+      postsLeft: Int,
+      navTimeoutMs: Int,
+  ): Option[(Future[(String, String)], Int)] = step match
+    case NavStep.Done => None
+    case NavStep.Follow(i) => links.lift(i).map { link =>
+        val f = sessionSubmit(session) { r =>
+          r.navFollow(link, navTimeoutMs); (r.navUrl(), r.navHtml())
+        }
+        (f, postsLeft)
+      }
+    case NavStep.Submit(fi, values, safe) => forms.lift(fi).flatMap { form =>
+        ActionGuard.allow(form, safe) match
+          case Left(reason) =>
+            org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner")
+              .info("Nav submit to {} refused: {}", form.action, reason)
+            None
+          case Right(_) if form.method == "post" && postsLeft <= 0 => None
+          case Right(_) =>
+            val posts =
+              if form.method == "post" then postsLeft - 1 else postsLeft
+            val f = sessionSubmit(session) { r =>
+              r.navSubmit(fi, values.toSeq, navTimeoutMs)
+              (r.navUrl(), r.navHtml())
+            }
+            Some((f, posts))
+      }
+
+  private def navSig(
+      step: NavStep,
+      forms: Seq[FormParse.FormInfo],
+      links: Seq[String],
+  ): String = step match
+    case NavStep.Follow(i) => s"follow:${links.lift(i).getOrElse(i.toString)}"
+    case NavStep.Submit(fi, values, _) => s"submit:${forms.lift(fi)
+          .map(_.action).getOrElse(fi.toString)}:${values.toSeq.sorted}"
+    case NavStep.Done => "done"
+
+  private def makeBrowser(navTimeoutMs: Int): Int => BrowserResource = i =>
+    new BrowserResource(
+      i,
+      None,
+      BrowserResource.Settings(
+        navigationTimeoutMs = navTimeoutMs,
+        stealth = false,
+        userAgent = Some("pekko-dast-scanner/0.1 (+authorized security testing)"),
+      ),
+    )
+
+  /** Submit one unit of work to a dedicated session and get its result. */
+  private def sessionSubmit[T](
+      session: ActorRef[crawler.pool.ResourceSession.Command],
+  )(work: BrowserResource => T): Future[T] =
+    val p = scala.concurrent.Promise[Any]()
+    session !
+      crawler.pool.ResourceSession.Submit(work.asInstanceOf[Any => Any], p)
+    p.future.asInstanceOf[Future[T]]
+
+  /** Resolve a cookie via the nav session (login on it if configured). */
+  private def resolveCookieVia(
+      session: ActorRef[crawler.pool.ResourceSession.Command],
+      identity: Identity,
+      auth: Authorization,
+  )(using ExecutionContext): Future[Option[String]] = identity.login match
+    case None => Future.successful(identity.cookie)
+    case Some(login) =>
+      ConsentGate.decide(auth, ActionClass.Active, login.loginUrl) match
+        case GateDecision.Deny(_) => Future.successful(identity.cookie)
+        case GateDecision.Permit => sessionSubmit(session)(r =>
+            LoginOp.login(r, login.loginUrl, login.username, login.password),
+          ).map {
+            case Right(c) => Some(c)
+            case Left(_) => identity.cookie
+          }
 
   /** Parse a Cookie header value into (name, value) pairs. */
   private def parseCookies(header: Option[String]): Seq[(String, String)] =

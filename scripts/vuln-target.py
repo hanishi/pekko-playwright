@@ -60,10 +60,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
+            # The account id comes from the SPA's own ?id (default 1001), and
+            # the page links to another id. So a link crawl sees only the link;
+            # only running the JS reveals the /api/account XHR, and following
+            # the link reveals a second one (multi-hop in-browser navigation).
             body = (
                 b"<html><head><title>app</title></head><body><div id=app></div>"
-                b"<script>fetch('/api/account?id=1001')"
-                b".then(r=>r.json()).then(d=>{"
+                b'<a href="/app?id=1002">view 1002</a>'
+                b"<script>var id=new URLSearchParams(location.search).get('id')||'1001';"
+                b"fetch('/api/account?id='+id).then(r=>r.json()).then(d=>{"
                 b"document.getElementById('app').textContent=d.email;});"
                 b"</script></body></html>"
             )

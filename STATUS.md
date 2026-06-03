@@ -106,11 +106,15 @@ gitignored `*.local.json`.
 ## Honest architecture notes
 
 - The **browser earns its place for execution-confirmed XSS**, DOM sink-reach,
-  authenticated login, and **SPA network capture** (`SpaIdorScannerMain` /
-  `BrowserResource.captureRequests`): loading an app in an authenticated browser
-  and observing the XHR/fetch it makes reveals the JSON API surface a link crawl
-  never sees, which is exactly where SPA IDOR lives. Cookies/headers are read off
-  a normal visit; redirect/SQLi/SSRF are pure HTTP and run off the browser pool.
+  authenticated login, and **SPA navigation** (`SpaIdorScannerMain`): the model
+  drives a real browser (clicks links / submits forms) through a JS app while
+  every request it makes is recorded; the captured XHR/fetch endpoints (the JSON
+  API surface a link crawl never sees, where SPA IDOR lives) are then IDOR-
+  planned. This runs on **one dedicated `ResourceSession`, not the pool** -- a
+  single page kept alive across the LLM-paced hops (the model call runs
+  off-thread between submits); `ResourceSession` gives the thread-affinity, the
+  pool's router is unnecessary for a single sequential browser. Cookies/headers
+  are read off a normal visit; redirect/SQLi/SSRF are pure HTTP, off the browser.
 - **Where the LLM earns its place: LLM-planned, LLM-navigated IDOR**
   (`IdorScannerMain`). From a seed it logs in, then:
   - **crawls** same-host links (`AuthCrawl`, deterministic) for breadth, and

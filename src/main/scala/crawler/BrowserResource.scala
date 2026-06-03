@@ -166,44 +166,109 @@ final class BrowserResource(
       catch { case _: Exception => () }
   }
 
-  /** Load `url` in a fresh, optionally cookie-authenticated context and capture
-    * every request the page makes (including JS-driven XHR / fetch), so an
-    * SPA's API surface is observable. Returns the requested URLs (deduped).
-    * Browser work on the pinned thread: invoke only via `pool.submit`.
-    * Read-only (it navigates and observes; it submits nothing).
+  // --- Persistent navigation session ---------------------------------------
+  // For LLM-driven multi-hop browser navigation: one page kept alive across
+  // many `pool`/`session` submits, so the model can click/submit through a
+  // (possibly JS-driven) app while we accumulate the requests it makes. All of
+  // these run on the pinned thread (submit-only); the mutable slots are safe
+  // because only the pinned thread touches them.
+  private var navCtx: BrowserContext = null
+  private var navPage: Page = null
+  private val navReqs = java.util.Collections
+    .synchronizedList(new java.util.ArrayList[String]())
+
+  /** Open a fresh, optionally cookie-authenticated nav page at `url` and start
+    * recording every request it makes (incl. JS XHR/fetch).
     */
-  def captureRequests(
+  def navStart(
       url: String,
       cookies: Seq[(String, String)],
       navTimeoutMs: Int,
-  ): Seq[String] = {
-    val ctx = newContext()
-    try {
-      if (cookies.nonEmpty) ctx
-        .addCookies(cookies.map((n, v) => new PwCookie(n, v).setUrl(url)).asJava)
-      val page = ctx.newPage()
-      val seen = java.util.Collections
-        .synchronizedList(new java.util.ArrayList[String]())
-      page.onRequest { (req: Request) =>
-        seen.add(req.url()); ()
+  ): Unit = {
+    navCtx = newContext()
+    if (cookies.nonEmpty) navCtx
+      .addCookies(cookies.map((n, v) => new PwCookie(n, v).setUrl(url)).asJava)
+    navPage = navCtx.newPage()
+    navReqs.clear()
+    navPage.onRequest { (req: Request) =>
+      navReqs.add(req.url()); ()
+    }
+    navGo(url, navTimeoutMs)
+  }
+
+  private def navGo(url: String, navTimeoutMs: Int): Unit = {
+    navPage.navigate(
+      url,
+      new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD)
+        .setTimeout(navTimeoutMs),
+    )
+    try navPage.waitForLoadState(
+        LoadState.NETWORKIDLE,
+        new Page.WaitForLoadStateOptions().setTimeout(navTimeoutMs.toDouble),
+      )
+    catch { case _: Exception => () }
+  }
+
+  /** The live nav page's current URL (post client-side routing). */
+  def navUrl(): String = if (navPage != null) navPage.url() else ""
+
+  /** The live nav page's rendered HTML (post-JS), for form/link extraction. */
+  def navHtml(): String =
+    if (navPage != null)
+      try navPage.content()
+      catch { case _: Exception => "" }
+    else ""
+
+  /** Navigate the nav page to `url` (a model-chosen link). */
+  def navFollow(url: String, navTimeoutMs: Int): Unit =
+    if (navPage != null) navGo(url, navTimeoutMs)
+
+  /** Fill and submit the `formIndex`-th form on the live nav page (document
+    * order, matching the HTML extraction), triggering its real JS handler.
+    */
+  def navSubmit(
+      formIndex: Int,
+      values: Seq[(String, String)],
+      navTimeoutMs: Int,
+  ): Unit = if (navPage != null) {
+    val forms = navPage.querySelectorAll("form")
+    if (formIndex >= 0 && formIndex < forms.size) {
+      val form = forms.get(formIndex)
+      values.foreach { (n, v) =>
+        Option(form.querySelector(s"[name='$n']")).foreach(_.fill(v))
       }
-      try {
-        page.navigate(
-          url,
-          new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD)
-            .setTimeout(navTimeoutMs),
-        )
-        // Let JS-driven XHR/fetch settle so the SPA's API calls are captured.
-        try page.waitForLoadState(
-            LoadState.NETWORKIDLE,
-            new Page.WaitForLoadStateOptions().setTimeout(navTimeoutMs.toDouble),
+      Option(
+        form.querySelector("button[type=submit], input[type=submit], button"),
+      ) match {
+        case Some(btn) =>
+          try btn.click()
+          catch { case _: Exception => () }
+        case None => Option(form.querySelector("input")).foreach(i =>
+            try i.press("Enter")
+            catch { case _: Exception => () },
           )
-        catch { case _: Exception => () }
-      } catch { case _: Exception => () }
-      seen.asScala.toList.distinct
-    } finally
-      try ctx.close()
+      }
+      try navPage.waitForLoadState(LoadState.LOAD)
       catch { case _: Exception => () }
+      try navPage.waitForLoadState(
+          LoadState.NETWORKIDLE,
+          new Page.WaitForLoadStateOptions().setTimeout(navTimeoutMs.toDouble),
+        )
+      catch { case _: Exception => () }
+    }
+  }
+
+  /** All requests the nav page has made so far (deduped). */
+  def navRequests(): Seq[String] = navReqs.asScala.toList.distinct
+
+  /** Close the nav page and its context. */
+  def navStop(): Unit = {
+    try if (navPage != null) navPage.close()
+    catch { case _: Exception => () }
+    try if (navCtx != null) navCtx.close()
+    catch { case _: Exception => () }
+    navPage = null
+    navCtx = null
   }
 
   private def newContext(): BrowserContext = {

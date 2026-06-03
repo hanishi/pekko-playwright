@@ -21,7 +21,8 @@ import dast.Finding
   * browser observes the API surface a link crawl cannot see. Active, gated
   * against `DAST_AUTHORIZED_HOSTS`; needs `ANTHROPIC_API_KEY` for the planner.
   *
-  * Usage: sbt "runMain dast.scan.SpaIdorScannerMain <app-url> <identity-spec.json>"
+  * Usage: sbt "runMain dast.scan.SpaIdorScannerMain <app-url>
+  * <identity-spec.json>"
   */
 object SpaIdorScannerMain:
 
@@ -39,7 +40,8 @@ object SpaIdorScannerMain:
             Console.err.println(err)
             sys.exit(2)
       case _ =>
-        Console.err.println("usage: SpaIdorScannerMain <app-url> <identity-spec.json>")
+        Console.err
+          .println("usage: SpaIdorScannerMain <app-url> <identity-spec.json>")
         sys.exit(2)
 
   private def loadIdentity(path: String): Either[String, Identity] = Try {
@@ -51,6 +53,8 @@ object SpaIdorScannerMain:
     .flatMap(_.identities.values.headOption.toRight("spec has no identities"))
 
   private def navTimeoutMs: Int = DastConfig.getInt("DAST_NAV_TIMEOUT_MS", 30000)
+  private def maxHops: Int = DastConfig.getInt("DAST_MAX_HOPS", 6)
+  private def postBudget: Int = DastConfig.getInt("DAST_POST_BUDGET", 3)
 
   private def authorization: Authorization = DastConfig
     .get("DAST_AUTHORIZED_HOSTS") match
@@ -72,7 +76,10 @@ object SpaIdorScannerMain:
       if auth.allowActive then auth.authorizedHosts.mkString(",")
       else "observe-only (skipped)",
     )
-    ctx.pipeToSelf(Scanner.runSpaIdor(ctx, url, identity, auth, navTimeoutMs)) {
+    ctx.pipeToSelf(
+      Scanner
+        .runSpaIdor(ctx, url, identity, auth, navTimeoutMs, maxHops, postBudget),
+    ) {
       case scala.util.Success(fs) => fs
       case scala.util.Failure(t) =>
         ctx.log.error("SPA scan failed: {}", t.toString)
