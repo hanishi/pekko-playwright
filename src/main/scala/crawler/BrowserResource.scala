@@ -177,24 +177,105 @@ final class BrowserResource(
   private val navReqs = java.util.Collections
     .synchronizedList(new java.util.ArrayList[String]())
 
-  /** Open a fresh, optionally cookie-authenticated nav page at `url` and start
-    * recording every request it makes (incl. JS XHR/fetch).
+  /** Open a fresh nav context+page (optionally seeded with cookies) and start
+    * recording every request it makes (incl. JS XHR/fetch). Does NOT navigate
+    * yet, so a login can run in this same context first (so the app's JS sets
+    * up localStorage/session that subsequent navigation needs).
     */
-  def navStart(
-      url: String,
-      cookies: Seq[(String, String)],
-      navTimeoutMs: Int,
-  ): Unit = {
+  def navOpen(cookies: Seq[(String, String)], baseUrl: String): Unit = {
     navCtx = newContext()
-    if (cookies.nonEmpty) navCtx
-      .addCookies(cookies.map((n, v) => new PwCookie(n, v).setUrl(url)).asJava)
+    if (cookies.nonEmpty) navCtx.addCookies(
+      cookies.map((n, v) => new PwCookie(n, v).setUrl(baseUrl)).asJava,
+    )
     navPage = navCtx.newPage()
     navReqs.clear()
     navPage.onRequest { (req: Request) =>
       navReqs.add(req.url()); ()
     }
-    navGo(url, navTimeoutMs)
   }
+
+  /** Navigate the open nav page to `url`. */
+  def navGoto(url: String, navTimeoutMs: Int): Unit =
+    if (navPage != null) navGo(url, navTimeoutMs)
+
+  /** Log in within the nav context by driving the real login form, so the app's
+    * JavaScript establishes the client session (cookies AND localStorage) that
+    * the SPA's route guard checks. Field detection is deterministic (password
+    * input + nearest text input + submit control); the model is not consulted
+    * (instruction.md §5 authenticated-scan carve-out, §0.2).
+    */
+  def navLogin(
+      loginUrl: String,
+      username: String,
+      password: String,
+      navTimeoutMs: Int,
+  ): Unit = if (navPage != null) {
+    navGo(loginUrl, navTimeoutMs)
+    Option(navPage.querySelector("input[type=password]")) match {
+      case None => log.warn("navLogin: no password field at {}", loginUrl)
+      case Some(pwd) =>
+        val user = navUsernameField()
+        log.info(
+          "navLogin: form at {} (username field found={})",
+          loginUrl,
+          user.isDefined,
+        )
+        user.foreach(_.fill(username))
+        pwd.fill(password)
+        navSubmitButton() match {
+          case Some(btn) =>
+            try btn.click()
+            catch { case _: Exception => () }
+          case None =>
+            try pwd.press("Enter")
+            catch { case _: Exception => () }
+        }
+        try navPage.waitForLoadState(LoadState.LOAD)
+        catch { case _: Exception => () }
+        try navPage.waitForLoadState(
+            LoadState.NETWORKIDLE,
+            new Page.WaitForLoadStateOptions().setTimeout(navTimeoutMs.toDouble),
+          )
+        catch { case _: Exception => () }
+        log.info(
+          "navLogin: after submit at {} ({} cookie(s))",
+          navPage.url(),
+          navCtx.cookies().size,
+        )
+    }
+  }
+
+  /** The login submit control: a real submit if present, else the button whose
+    * text looks like sign-in/login (htmx buttons are often not type=submit and
+    * may sit outside a <form>), else the first button.
+    */
+  private def navSubmitButton(): Option[ElementHandle] =
+    Option(navPage.querySelector("button[type=submit], input[type=submit]"))
+      .orElse {
+        val buttons = navPage.querySelectorAll("button").asScala.toSeq
+        val keywords =
+          Seq("sign in", "signin", "sign-in", "log in", "login", "submit")
+        buttons.find { b =>
+          val t = Option(b.innerText()).getOrElse("").toLowerCase
+          keywords.exists(t.contains)
+        }.orElse(buttons.headOption)
+      }
+
+  private def navUsernameField() = Option(
+    navPage.querySelector("input[type=email]"),
+  ).orElse(Option(navPage.querySelector("input[type=text]"))).orElse(Option(
+    navPage.querySelector("input[name='username'], input[name='user'], input[name='email'], input[name='login']"),
+  )).orElse(Option(
+    navPage.querySelector("input:not([type='password']):not([type='hidden']):not([type='submit']):not([type='checkbox']):not([type='radio'])"),
+  ))
+
+  /** The nav context's current cookies as (name, value) pairs, e.g. to replay
+    * the post-login session in the (HTTP) IDOR confirm step.
+    */
+  def navCookies(): Seq[(String, String)] =
+    if (navCtx != null) navCtx.cookies().asScala.map(c => c.name -> c.value)
+      .toSeq
+    else Seq.empty
 
   private def navGo(url: String, navTimeoutMs: Int): Unit = {
     navPage.navigate(

@@ -201,36 +201,67 @@ object Scanner:
             .ResourceSession[BrowserResource](0, makeBrowser(navTimeoutMs)),
           s"dast-nav-session-${poolCounter.incrementAndGet()}",
         )
-        val result = resolveCookieVia(session, identity, auth).flatMap { cookie =>
-          sessionSubmit(session) { r =>
-            r.navStart(url, parseCookies(cookie), navTimeoutMs)
-            (r.navUrl(), r.navHtml())
-          }.flatMap { (u0, h0) =>
-            navHop(
-              session,
-              seedHost,
-              u0,
-              h0,
-              Set.empty,
-              maxHops,
-              postBudget,
-              auth,
-              navTimeoutMs,
+        // Log in WITHIN the nav context (so the app's JS sets up the client
+        // session incl. localStorage), then navigate to the seed and observe.
+        // The post-login cookies are reused for the (HTTP) IDOR confirm step.
+        val loginAllowed = identity.login.exists(l =>
+          ConsentGate.decide(auth, ActionClass.Active, l.loginUrl) ==
+            GateDecision.Permit,
+        )
+        org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
+          "SPA: login configured={}, loginAllowed={}",
+          identity.login.isDefined,
+          loginAllowed,
+        )
+        val result = sessionSubmit(session) { r =>
+          r.navOpen(parseCookies(identity.cookie), url)
+          if loginAllowed then
+            identity.login.foreach(l =>
+              r.navLogin(l.loginUrl, l.username, l.password, navTimeoutMs),
             )
-          }.flatMap { _ =>
+          val landedAfterLogin = r.navUrl()
+          r.navGoto(url, navTimeoutMs)
+          // If the seed is public and bounced us back to a login page, fall
+          // back to where login landed (the authenticated area).
+          if r.navUrl().contains("/login") &&
+            !landedAfterLogin.contains("/login")
+          then r.navGoto(landedAfterLogin, navTimeoutMs)
+          (r.navUrl(), r.navHtml(), r.navCookies())
+        }.flatMap { (u0, h0, cookiePairs) =>
+          val cookie =
+            if cookiePairs.isEmpty then identity.cookie
+            else Some(cookiePairs.map((n, v) => s"$n=$v").mkString("; "))
+          org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
+            "SPA nav: landed on {} after auth ({} cookie(s) in context)",
+            u0,
+            cookiePairs.size,
+          )
+          navHop(
+            session,
+            seedHost,
+            u0,
+            h0,
+            Set.empty,
+            maxHops,
+            postBudget,
+            auth,
+            navTimeoutMs,
+          ).flatMap { _ =>
             sessionSubmit(session) { r =>
               val reqs = r.navRequests(); r.navStop(); reqs
             }
           }.flatMap { requested =>
-            val targets = requested.map(UrlNormalizer.normalize)
-              .filter(u => Scope.inScope(seedHost, u))
-              .filter(u => IdorPlan.queryParams(u).nonEmpty).distinct
-            org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner").info(
+            val sameHost = requested.map(UrlNormalizer.normalize)
+              .filter(u => Scope.inScope(seedHost, u)).distinct
+            val targets = sameHost.filter(u => IdorPlan.queryParams(u).nonEmpty)
+            val log = org.slf4j.LoggerFactory.getLogger("dast.scan.Scanner")
+            log.info(
               "SPA nav from {}: {} request(s) observed, {} API endpoint(s) to plan",
               url,
               requested.size,
               targets.size,
             )
+            sameHost.foreach(u => log.info("  observed: {}", u))
             Future.sequence(
               targets.map(u => IdorProbe.scan(u, cookie, auth, IdorPlanner.plan)),
             ).map(_.flatten.toVector)
@@ -362,23 +393,6 @@ object Scanner:
     session !
       crawler.pool.ResourceSession.Submit(work.asInstanceOf[Any => Any], p)
     p.future.asInstanceOf[Future[T]]
-
-  /** Resolve a cookie via the nav session (login on it if configured). */
-  private def resolveCookieVia(
-      session: ActorRef[crawler.pool.ResourceSession.Command],
-      identity: Identity,
-      auth: Authorization,
-  )(using ExecutionContext): Future[Option[String]] = identity.login match
-    case None => Future.successful(identity.cookie)
-    case Some(login) =>
-      ConsentGate.decide(auth, ActionClass.Active, login.loginUrl) match
-        case GateDecision.Deny(_) => Future.successful(identity.cookie)
-        case GateDecision.Permit => sessionSubmit(session)(r =>
-            LoginOp.login(r, login.loginUrl, login.username, login.password),
-          ).map {
-            case Right(c) => Some(c)
-            case Left(_) => identity.cookie
-          }
 
   /** Parse a Cookie header value into (name, value) pairs. */
   private def parseCookies(header: Option[String]): Seq[(String, String)] =

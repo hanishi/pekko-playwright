@@ -29,18 +29,18 @@ final class AsyncSemaphore(permits: Int):
   }
 
   private def release(): Unit = synchronized {
-    if waiters.nonEmpty then waiters.dequeue().success(())
-    else available += 1
+    if waiters.nonEmpty then waiters.dequeue().success(()) else available += 1
   }
 
   /** Run `task` once a permit is free, releasing it when the task completes
     * (success or failure).
     */
-  def withPermit[T](task: () => Future[T])(using ec: ExecutionContext): Future[T] =
-    acquire().flatMap { _ =>
-      val f =
-        try task()
-        catch { case NonFatal(e) => Future.failed(e) }
-      f.onComplete(_ => release())
-      f
-    }
+  def withPermit[T](task: () => Future[T])(using
+      ec: ExecutionContext,
+  ): Future[T] = acquire().flatMap { _ =>
+    val f =
+      try task()
+      catch { case NonFatal(e) => Future.failed(e) }
+    f.onComplete(_ => release())
+    f
+  }

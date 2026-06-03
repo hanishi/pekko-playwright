@@ -26,7 +26,9 @@ class AsyncSemaphoreSpec extends AnyWordSpec with Matchers {
         sem.withPermit { () =>
           val now = live.incrementAndGet()
           maxLive.updateAndGet(m => math.max(m, now))
-          gate.future.map { _ => live.decrementAndGet(); () }
+          gate.future.map { _ =>
+            live.decrementAndGet(); ()
+          }
         }
       }
       // Let the first wave acquire, then release everyone.
@@ -42,7 +44,8 @@ class AsyncSemaphoreSpec extends AnyWordSpec with Matchers {
       val boom = sem.withPermit(() => Future.failed(new RuntimeException("x")))
       Await.ready(boom, 2.seconds)
       // If the permit leaked, this would never complete.
-      Await.result(sem.withPermit(() => Future.successful(42)), 2.seconds) shouldBe
+      Await
+        .result(sem.withPermit(() => Future.successful(42)), 2.seconds) shouldBe
         42
     }
   }
